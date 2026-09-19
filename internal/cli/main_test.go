@@ -53,13 +53,17 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 	code := m.Run()
-	if strays := listTree(home); len(strays) != 0 && code == 0 {
+	// Always report strays — a test that failed BECAUSE it hit the wrong home
+	// needs this listing most — and turn a green run red on them.
+	if strays := listTree(home); len(strays) != 0 {
 		fmt.Fprintln(os.Stderr, "testmain: a test wrote into the neutral HOME instead of its AGENTSYNC_TARGET_ROOT redirect:")
 		for _, s := range strays {
 			fmt.Fprintf(os.Stderr, "  %s\n", s)
 		}
 		fmt.Fprintln(os.Stderr, "testmain: every cli test must set AGENTSYNC_TARGET_ROOT (or HOME) to a tmp dir (issue #270)")
-		code = 1
+		if code == 0 {
+			code = 1
+		}
 	}
 	// Leave the neutral dirs before removing them (best effort; os.Exit skips defers).
 	_ = os.Chdir(os.TempDir())

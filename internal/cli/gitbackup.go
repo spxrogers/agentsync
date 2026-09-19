@@ -25,11 +25,11 @@ import (
 // by the time the checkpoint pass opens it, and a dir the user declined (or a foreign
 // dir) is remembered rather than prompted/hinted twice.
 type gitBackupSession struct {
-	cmd  *cobra.Command
-	p    *ui.Printer
-	home string
-	id   agit.Identity
-	mode string
+	cmd           *cobra.Command
+	p             *ui.Printer
+	agentsyncHome string // the canonical source root (agentsync.toml lives here) — NOT the user home; see userHome in partitionVersionRoots
+	id            agit.Identity
+	mode          string
 	// roots is the union of every enabled agent's declared version roots, de-nested
 	// (no repo inside a repo) and de-duped — the DIRECTORY is the unit of versioning,
 	// so a shared dir (e.g. ~/.agents/skills, written by Codex + several breadth
@@ -63,7 +63,7 @@ func (s *gitBackupSession) gitPermWarn() func(string) {
 // baseline/checkpoint methods are safe no-ops, so callers need not branch.
 func newGitBackupSession(
 	cmd *cobra.Command, p *ui.Printer, reg *adapter.Registry, agents []string,
-	sc adapter.Scope, projectRoot, home string,
+	sc adapter.Scope, projectRoot, agentsyncHome string,
 	cfg source.DestinationGitBackupConfig, noGitBackup bool,
 ) *gitBackupSession {
 	if sc != adapter.ScopeUser || noGitBackup {
@@ -81,13 +81,13 @@ func newGitBackupSession(
 		p.Warnf("git backup: skipping %s — it contains your home directory %s, and agentsync never inits a repo at or above $HOME.", r, userHome)
 	}
 	return &gitBackupSession{
-		cmd:     cmd,
-		p:       p,
-		home:    home,
-		id:      agit.Identity{Name: cfg.AuthorName, Email: cfg.AuthorEmail},
-		mode:    mode,
-		roots:   roots,
-		handled: map[string]bool{},
+		cmd:           cmd,
+		p:             p,
+		agentsyncHome: agentsyncHome,
+		id:            agit.Identity{Name: cfg.AuthorName, Email: cfg.AuthorEmail},
+		mode:          mode,
+		roots:         roots,
+		handled:       map[string]bool{},
 	}
 }
 
@@ -117,7 +117,7 @@ func (s *gitBackupSession) resolveBackupRepo(root string, st agit.State, hasWrit
 			return nil, nil // nothing to record, or the decision was already made this run
 		}
 		s.handled[root] = true
-		return ensureUntrackedRepo(s.cmd, s.p, root, s.home, &s.mode, &s.hintedUnavailable, &s.warnedCleartext)
+		return ensureUntrackedRepo(s.cmd, s.p, root, s.agentsyncHome, &s.mode, &s.hintedUnavailable, &s.warnedCleartext)
 	}
 	return nil, nil
 }
@@ -355,10 +355,10 @@ func (s *gitBackupSession) checkpoint(written map[string]bool) error {
 // "off", an empty write set, or an agent dir under foreign source control.
 func runDestinationGitBackup(
 	cmd *cobra.Command, p *ui.Printer, reg *adapter.Registry, agents []string,
-	sc adapter.Scope, projectRoot, home string,
+	sc adapter.Scope, projectRoot, agentsyncHome string,
 	cfg source.DestinationGitBackupConfig, written map[string]bool, noGitBackup bool,
 ) error {
-	return newGitBackupSession(cmd, p, reg, agents, sc, projectRoot, home, cfg, noGitBackup).checkpoint(written)
+	return newGitBackupSession(cmd, p, reg, agents, sc, projectRoot, agentsyncHome, cfg, noGitBackup).checkpoint(written)
 }
 
 // baselineMessage renders the commit subject for a pre-apply baseline checkpoint.
@@ -367,47 +367,45 @@ func baselineMessage(root string) string {
 }
 
 // enabledVersionRoots returns the de-duplicated, de-nested, sorted set of
-// version-root directories declared by the given agents at the scope. The unit is
-// the directory: a shared dir declared by several agents appears once, and a dir
-// nested under another (e.g. ~/.claude/skills under ~/.claude) is dropped in favor
-// of the ancestor — so agentsync never creates a repo inside another repo.
-//
-// DEDUP CASING (nit, issue #175; revisited in #270): the seen[] key is the
-// BYTE-EXACT cleaned path (filepath.Clean), so on a case-insensitive filesystem two
-// roots differing only in case are treated as distinct. Every version root but one
-// is a hardcoded string literal with fixed casing (the deep adapters' Paths +
-// generic.versionRootOf), so those can never collide by case alone. The exception
-// is Grok's user-scope root, which derives from the user-typed GROK_HOME: a
-// GROK_HOME that differs from another agent's root ONLY in case (say `~/.Codex` on
-// macOS) is not de-duped against it, and both names reach the init/checkpoint pass.
-// The consequence is bounded: resolveBackupRepo gates on agit.Detect, which follows
-// the filesystem, so the second spelling detects as agentsync-owned (the .git the
-// first spelling created) and is opened, not inited — one repo is checkpointed
-// under two names, each commit staging that name's own managed files, never a repo
-// inside a repo and never data loss. That is why the key stays byte-exact rather
-// than growing a case-folding branch that would have to detect FS case-sensitivity
-// at runtime. (The $HOME guard below is a different matter and DOES fold case and
-// symlinks, via paths.ContainsDir — there the cost of a miss is a repo at $HOME.)
-//
-// NEVER AT OR ABOVE $HOME (issue #270): userHome is the user's home directory
-// (paths.HomeDir), and any declared root that CONTAINS it — $HOME itself, or an
-// ancestor such as `/` or `/home` — is dropped before de-nesting. Such a root
-// would otherwise fold every other agent's dir into itself and have agentsync
-// `git init` the user's home, breaking the documented invariant that it never
-// inits a repo at $HOME. No hardcoded adapter root can do this, but an
-// env-derived one (Grok's GROK_HOME) can; the adapter refuses the two obvious
-// values (`/`, $HOME) with an error, and this is the central backstop for the
-// rest (`/home`, `/Users`, a symlinked spelling). Callers that can talk to the
-// user (the apply-tail session) use partitionVersionRoots to warn about what
-// was dropped, so the loss of git backup is never silent.
+// version-root directories declared by the given agents at the scope, minus any
+// root at or above the user's home. The unit is the directory: a shared dir
+// declared by several agents appears once, and a dir nested under another (e.g.
+// ~/.claude/skills under ~/.claude) is dropped in favor of the ancestor — so
+// agentsync never creates a repo inside another repo. It is partitionVersionRoots
+// for callers that have no one to tell about the dropped roots (revert, and tests).
 func enabledVersionRoots(reg *adapter.Registry, agents []string, sc adapter.Scope, project, userHome string) []string {
 	kept, _ := partitionVersionRoots(reg, agents, sc, project, userHome)
 	return kept
 }
 
-// partitionVersionRoots is enabledVersionRoots plus the roots it dropped for
-// containing userHome (cleaned, de-duped, sorted; NOT de-nested — each is
-// reported on its own).
+// partitionVersionRoots splits the agents' declared version roots into the ones
+// git backup will use (cleaned, de-duped, de-nested, sorted) and the ones it
+// refuses because they contain userHome (cleaned, de-duped, sorted; NOT
+// de-nested — each is reported on its own).
+//
+// NEVER AT OR ABOVE $HOME (issue #270): userHome is the user's home directory
+// (paths.HomeDir), and any declared root that CONTAINS it — $HOME itself, or an
+// ancestor such as `/` or `/home`, in any spelling paths.ContainsDir normalizes
+// (symlinks, case on macOS/Windows) — is dropped before de-nesting. Such a root
+// would otherwise fold every other agent's dir into itself and have agentsync
+// `git init` the user's home, breaking the documented invariant that it never
+// inits a repo at $HOME. No hardcoded adapter root can do this, but an
+// env-derived one (Grok's GROK_HOME) can; the adapter refuses the two obvious
+// values (`/`, $HOME) with an error, and this is the central backstop for the
+// rest. Callers that can talk to the user (the apply-tail session, doctor) report
+// the swallowing set so the loss of git backup is never silent. An empty
+// userHome (HOME unset and no redirect — a cron or systemd job) disables the
+// guard deliberately: there is no home to protect, and every adapter's
+// TargetRoot is "" in that state anyway.
+//
+// DEDUP CASING (nit, issue #175; revisited in #270): the seen[] key is the
+// BYTE-EXACT cleaned path, so on a case-insensitive filesystem two roots differing
+// only in case are not de-duped here (de-nesting below DOES fold them, keeping the
+// first spelling). Every version root but one is a hardcoded literal with fixed
+// casing; the exception is Grok's user-typed GROK_HOME. The residual is bounded:
+// resolveBackupRepo gates on agit.Detect, which follows the filesystem, so a
+// second spelling of an inited dir is opened, never re-inited — one repo
+// checkpointed under two names, never a repo inside a repo and never data loss.
 func partitionVersionRoots(reg *adapter.Registry, agents []string, sc adapter.Scope, project, userHome string) (kept, swallowing []string) {
 	seen := map[string]bool{}
 	var all []string
@@ -478,7 +476,7 @@ func versionRootOwners(reg *adapter.Registry, agents []string, sc adapter.Scope,
 			}
 			c := filepath.Clean(r)
 			for _, root := range roots {
-				if isUnderDir(c, root) {
+				if paths.ContainsDir(root, c) {
 					if owners[root] == nil {
 						owners[root] = map[string]bool{}
 					}
@@ -505,7 +503,7 @@ func versionRootOwners(reg *adapter.Registry, agents []string, sc adapter.Scope,
 // OWN de-nested root can be a child that was parent-folded away in that map (e.g.
 // OpenCode's ~/.claude/skills folds into Claude's ~/.claude). An exact-key miss
 // therefore falls back to the owners of the nearest ANCESTOR key (deepest key that
-// contains root, via isUnderDir), never a byte prefix. This keeps the shared-dir
+// contains root, via paths.ContainsDir), never a byte prefix. This keeps the shared-dir
 // blast-radius warning intact for parent-folded roots (issue #154).
 func ownersFor(owners map[string][]string, root string) []string {
 	if o, ok := owners[root]; ok {
@@ -513,7 +511,7 @@ func ownersFor(owners map[string][]string, root string) []string {
 	}
 	best := ""
 	for k := range owners {
-		if isUnderDir(root, k) && len(k) > len(best) {
+		if paths.ContainsDir(k, root) && len(k) > len(best) {
 			best = k
 		}
 	}
@@ -524,32 +522,44 @@ func ownersFor(owners map[string][]string, root string) []string {
 }
 
 // denestRoots returns roots sorted, with any root nested under another removed.
-// Lexical sort places an ancestor before its descendants (the ancestor path is a
-// prefix), so a single forward pass keeping non-nested roots is sufficient.
+//
+// Containment is paths.ContainsDir, which resolves symlinks, so "nested" means
+// nested in the directory tree git actually sees — not in the spelling. Two
+// consequences worth naming (issue #270): a not-yet-created child under a
+// symlinked parent (`~/.claude/skills` under `~/.claude → /data/claude` on a
+// first apply) still folds into the parent, because both spellings resolve
+// through the same existing ancestor; and a child root that is itself a symlink
+// OUT of its parent (`~/.claude/skills → /data/skills`) is kept as its own root,
+// because git does not follow symlinks into directories, so a repo there is not
+// a repo inside the parent's — and its contents were previously never versioned
+// at all (the parent repo tracked only the link). Because resolution can make a
+// later-sorting root the ancestor of an earlier one, every root is checked
+// against every OTHER root rather than only the ones already kept; two
+// spellings of one directory keep the first.
 func denestRoots(roots []string) []string {
 	sort.Strings(roots)
 	var kept []string
-	for _, r := range roots {
+	for i, r := range roots {
 		nested := false
-		for _, k := range kept {
-			if isUnderDir(r, k) {
-				nested = true
-				break
+		for j, k := range roots {
+			if i == j {
+				continue
 			}
+			if !paths.ContainsDir(k, r) {
+				continue
+			}
+			// Same directory under two spellings: keep the first spelling only.
+			if paths.ContainsDir(r, k) && j > i {
+				continue
+			}
+			nested = true
+			break
 		}
 		if !nested {
 			kept = append(kept, r)
 		}
 	}
 	return kept
-}
-
-// isUnderDir reports whether child is the same as, or nested under, parent. It is
-// paths.ContainsDir with the (child, parent) argument order this file's call
-// sites read naturally; the predicate itself lives in paths so every containment
-// decision in agentsync agrees (issue #270).
-func isUnderDir(child, parent string) bool {
-	return paths.ContainsDir(parent, child)
 }
 
 // ensureUntrackedRepo returns a repo to commit into for an untracked dir, honoring
@@ -566,7 +576,7 @@ func isUnderDir(child, parent string) bool {
 // on the first announcement only (once per run, shared with the
 // baseline-snapshot caution). Never fires on a declined / nested-skip (nil
 // repo) init.
-func ensureUntrackedRepo(cmd *cobra.Command, p *ui.Printer, dir, home string, mode *string, hintedUnavailable, warnedCleartext *bool) (*agit.Repo, error) {
+func ensureUntrackedRepo(cmd *cobra.Command, p *ui.Printer, dir, agentsyncHome string, mode *string, hintedUnavailable, warnedCleartext *bool) (*agit.Repo, error) {
 	switch *mode {
 	case source.GitBackupModeOn:
 		repo, err := initGuarded(p, dir)
@@ -600,13 +610,13 @@ func ensureUntrackedRepo(cmd *cobra.Command, p *ui.Printer, dir, home string, mo
 				// is not a silent change.
 				p.Infof("this directory was skipped, but auto-backup is now enabled for future directories and applies.")
 			}
-			if perr := setDestinationGitBackupMode(home, source.GitBackupModeOn); perr != nil {
+			if perr := setDestinationGitBackupMode(agentsyncHome, source.GitBackupModeOn); perr != nil {
 				p.Warnf("could not persist git-backup mode: %v", perr)
 			}
 			*mode = source.GitBackupModeOn
 			return repo, nil
 		case promptNever:
-			if perr := setDestinationGitBackupMode(home, source.GitBackupModeOff); perr != nil {
+			if perr := setDestinationGitBackupMode(agentsyncHome, source.GitBackupModeOff); perr != nil {
 				p.Warnf("could not persist git-backup mode: %v", perr)
 			}
 			*mode = source.GitBackupModeOff

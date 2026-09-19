@@ -610,6 +610,11 @@ reports directories to back up. The contract every implementor honours:
    `~/.claude/skills`. The apply tail **unions** these across every enabled adapter,
    **de-nests** them (drops a root nested under another — never a repo inside a
    repo), and **de-dups** them (a shared dir is one repo, checkpointed once).
+   "Nested" is decided by `paths.ContainsDir`, which follows the directory tree
+   git sees rather than the spelling: symlinks are resolved (through the deepest
+   *existing* ancestor, so a not-yet-created child under a symlinked parent still
+   folds in on a first apply), and a child root that is itself a symlink out of
+   its parent is its own root — git does not follow symlinks into directories.
 3. **Paths are absolute, after `AGENTSYNC_TARGET_ROOT` redirection** — they match
    the `FileOp.Path` values the adapter emits, so tests redirect `$HOME` uniformly.
 4. **`$HOME`-level strays are excluded.** A deep agent may also write a top-level

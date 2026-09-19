@@ -12,6 +12,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/spxrogers/agentsync/internal/adapter"
+	agit "github.com/spxrogers/agentsync/internal/git"
 	"github.com/spxrogers/agentsync/internal/source"
 	"github.com/spxrogers/agentsync/internal/testenv"
 	"github.com/spxrogers/agentsync/internal/ui"
@@ -93,5 +94,42 @@ func TestEnabledVersionRoots_NeverAtOrAboveHome(t *testing.T) {
 	}
 	if n := strings.Count(out, "never inits a repo at or above $HOME"); n != len(wantDropped) {
 		t.Errorf("want %d warnings, got %d:\n%s", len(wantDropped), n, out)
+	}
+}
+
+// TestDoctorReportsHomeSwallowingRoot backs the docs/grok.md claim that `doctor`
+// reports a version root the central guard refuses: with GROK_HOME pointing at
+// an ANCESTOR of $HOME (accepted by the adapter, dropped by the guard), the
+// destination-git-backup section names the root and the reason instead of
+// silently omitting grok from its table. Runs against the real registry with a
+// tmp HOME and no redirect, since the redirect would blank GROK_HOME.
+func TestDoctorReportsHomeSwallowingRoot(t *testing.T) {
+	testenv.RequireContainer(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("GROK_HOME", filepath.Dir(home)) // ancestor of $HOME: not refused, but never versioned
+	var out bytes.Buffer
+	p := ui.New(&out, &out, ui.ColorNever)
+	checkDestinationGitBackup(p, source.DestinationGitBackupConfig{Mode: source.GitBackupModeOn})
+	for _, want := range []string{filepath.Dir(home), "never inits a repo at or above $HOME"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("doctor output does not report the swallowing root (%q missing):\n%s", want, out.String())
+		}
+	}
+}
+
+// TestRevertAgent_SkipsHomeSwallowingRoot pins dropHomeSwallowing on the path
+// that reaches it: `revert grok` with a GROK_HOME above $HOME has no revertable
+// root, and says so, rather than operating on the ancestor directory.
+func TestRevertAgent_SkipsHomeSwallowingRoot(t *testing.T) {
+	testenv.RequireContainer(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("GROK_HOME", filepath.Dir(home))
+	var out bytes.Buffer
+	p := ui.New(&out, &out, ui.ColorNever)
+	err := revertAgent(p, registryFactory(), "grok", "", true, agit.Identity{}, true)
+	if err == nil || !strings.Contains(err.Error(), "no user-scope destination dir") {
+		t.Fatalf("revertAgent(grok) = %v; want the no-revertable-root error once the home-swallowing root is dropped", err)
 	}
 }

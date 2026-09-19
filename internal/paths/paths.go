@@ -96,21 +96,47 @@ func SameDir(a, b string) bool {
 }
 
 // normalizeDir is the shared canonical form behind ContainsDir and SameDir.
+//
+// Symlink resolution must be SYMMETRIC for a path that exists and one that does
+// not yet: on a first apply the parent root (`~/.claude`) exists but the nested
+// one (`~/.claude/skills`) is about to be created, and if only the existing
+// side were resolved through a symlinked `~/.claude` the two would normalize
+// into different trees and de-nesting would keep both — a repo inside a repo.
+// So a path that does not fully exist is resolved through its deepest EXISTING
+// ancestor and the remaining components are re-appended unchanged.
 func normalizeDir(p string) string {
-	p = filepath.Clean(p)
-	if resolved, err := filepath.EvalSymlinks(p); err == nil {
-		p = filepath.Clean(resolved)
-	}
+	p = resolveExistingPrefix(filepath.Clean(p))
 	if caseInsensitiveFS {
 		p = strings.ToLower(p)
 	}
 	return p
 }
 
+// resolveExistingPrefix returns p with its deepest existing ancestor (possibly
+// p itself) passed through filepath.EvalSymlinks and the non-existent tail
+// re-appended. A path with no existing ancestor at all (or one that errors for
+// any other reason) is returned cleaned but otherwise unchanged.
+func resolveExistingPrefix(p string) string {
+	var tail []string
+	for cur := p; ; {
+		if resolved, err := filepath.EvalSymlinks(cur); err == nil {
+			parts := append([]string{filepath.Clean(resolved)}, tail...)
+			return filepath.Join(parts...)
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			return p // reached the root without resolving anything
+		}
+		tail = append([]string{filepath.Base(cur)}, tail...)
+		cur = parent
+	}
+}
+
 // caseInsensitiveFS is true on the platforms whose default filesystems fold
 // case (APFS/HFS+ on macOS, NTFS on Windows). A per-path probe would be more
 // precise but would have to write to disk; the platform default is what every
-// user of those systems actually has.
+// user of those systems actually has. A var, not a const, only so an internal
+// test can exercise the fold on Linux.
 var caseInsensitiveFS = runtime.GOOS == "darwin" || runtime.GOOS == "windows"
 
 // AgentHomeOverride returns the value of a third-party agent's own home-override

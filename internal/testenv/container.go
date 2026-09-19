@@ -26,11 +26,11 @@ const EnvVar = "AGENTSYNC_TEST_IN_CONTAINER"
 // agentHomeVars are third-party agents' own home-override variables. They are
 // path-bearing, so production code reads them ONLY through
 // paths.AgentHomeOverride (which blanks them under AGENTSYNC_TARGET_ROOT) —
-// never a raw os.Getenv. TestAgentHomeVarsReadOnlyThroughPaths enforces that
-// by scanning the production sources. When an adapter starts honouring a new
-// such variable, add it here: the scrub, the source-scan guard, and the
-// configured-environment CI leg (TestConfiguredEnvLegCoversAmbientVars) all
-// key off this list.
+// never a raw os.Getenv. TestAgentHomeVarsReadOnlyThroughPaths (guards_test.go)
+// enforces that by scanning the production sources. When an adapter starts
+// honouring a new such variable, add it here: the scrub, the source-scan guard,
+// and the configured-environment CI leg (TestConfiguredEnvLegCoversAmbientVars)
+// all key off this list.
 var agentHomeVars = []string{"GROK_HOME"}
 
 // conventionVars are universal-convention variables production code reads
@@ -46,12 +46,6 @@ var conventionVars = []string{"NO_COLOR", "EDITOR"}
 // are scrubbed by prefix instead (see ScrubAmbient), so they never need
 // listing.
 var ambientVars = append(append([]string{}, agentHomeVars...), conventionVars...)
-
-// AgentHomeVars returns a copy of agentHomeVars for guard tests.
-func AgentHomeVars() []string { return append([]string{}, agentHomeVars...) }
-
-// AmbientVars returns a copy of ambientVars for guard tests.
-func AmbientVars() []string { return append([]string{}, ambientVars...) }
 
 // keepPrefixes are the AGENTSYNC_* families ScrubAmbient leaves alone: the
 // harness's own signals (AGENTSYNC_TEST_IN_CONTAINER, AGENTSYNC_TEST_DEBUG, …)
