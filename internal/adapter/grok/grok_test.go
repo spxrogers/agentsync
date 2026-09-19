@@ -166,16 +166,18 @@ headers = { Authorization = "Bearer synthetic-token" }
 
 func TestScopesDetectionAndHome(t *testing.T) {
 	root, project, custom := t.TempDir(), t.TempDir(), t.TempDir()
-	t.Setenv("PATH", t.TempDir())
-	a := grok.New(grok.Options{TargetRoot: root})
+	// Detection is driven through the injectable LookPath hook (like every other
+	// deep adapter), never the real PATH — so the developer's installed binaries
+	// cannot move this test (issue #270).
+	missing := func(string) (string, error) { return "", errors.New("not on PATH") }
+	found := func(file string) (string, error) { return "/fake/bin/" + file, nil }
+	a := grok.New(grok.Options{TargetRoot: root, LookPath: missing})
 	if detected, err := a.Detect(); err != nil || detected {
 		t.Fatalf("absent detection: %v %v", detected, err)
 	}
-	writeFile(t, filepath.Join(os.Getenv("PATH"), "grok"), []byte("#!/bin/sh\nexit 0\n"), 0o755)
-	if detected, err := a.Detect(); err != nil || !detected {
+	if detected, err := grok.New(grok.Options{TargetRoot: root, LookPath: found}).Detect(); err != nil || !detected {
 		t.Fatalf("binary detection: %v %v", detected, err)
 	}
-	t.Setenv("PATH", t.TempDir())
 	if err := os.MkdirAll(filepath.Join(root, ".grok"), 0o755); err != nil {
 		t.Fatal(err)
 	}

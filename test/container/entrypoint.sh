@@ -57,6 +57,14 @@ if [[ "${AGENTSYNC_TEST_CONFIGURED_ENV:-}" == "1" ]]; then
         chmod +x "$AMBIENT_BIN/$bin"
     done
     export PATH="$AMBIENT_BIN:$PATH"
+    # Self-check the wiring at runtime, not by reading this file: if the stubs
+    # are not what PATH resolves, the leg is inert and must fail loudly here
+    # rather than pass every test for the wrong reason (#271 review round 6:
+    # the flag was once never forwarded into the container, and nothing noticed).
+    if [[ "$(command -v codex)" != "$AMBIENT_BIN/codex" ]]; then
+        echo "error: configured-environment leg did not take effect (codex resolves to '$(command -v codex || true)')" >&2
+        exit 1
+    fi
     echo "==> configured-environment leg: $(ls "$AMBIENT_BIN" | wc -l) fake agent binaries on PATH ($AMBIENT_BIN)"
 fi
 

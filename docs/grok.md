@@ -32,7 +32,7 @@ backup like any other root. A `GROK_HOME` that is some *other* ancestor of
 `$HOME` (`/home`, `/Users`) is accepted for rendering and capture; the apply
 tail's central never-at-or-above-`$HOME` guard then drops it from git backup
 and says so in a warning (`TestEnabledVersionRoots_NeverAtOrAboveHome`,
-`TestEnabledVersionRoots_LexicalAncestorOfSymlinkedHome`), `doctor` reports it
+`TestPartitionVersionRoots_LexicalAncestorOfSymlinkedHome`), `doctor` reports it
 (`TestDoctorReportsHomeSwallowingRoot`), and `revert` skips it
 (`TestRevertAgent_SkipsHomeSwallowingRoot`).
 

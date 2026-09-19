@@ -11,17 +11,6 @@ import (
 	"github.com/spxrogers/agentsync/internal/testenv"
 )
 
-// entrypointPath is resolved at package init, while the working directory is
-// still this package's directory: TestMain then chdirs to a neutral dir (see
-// main_test.go), after which a relative path to the repo would not resolve.
-var entrypointPath = func() string {
-	wd, err := os.Getwd()
-	if err != nil {
-		return ""
-	}
-	return filepath.Join(wd, "..", "..", "test", "container", "entrypoint.sh")
-}()
-
 // TestConfiguredLegFakesEveryAgentBinary is the parity guard between the agent
 // binaries agentsync probes on PATH (deepAgentBinaries + every generic Spec's
 // DetectBin) and the stubs the configured-environment container leg puts on
@@ -31,10 +20,9 @@ var entrypointPath = func() string {
 // missing from the leg is a binary whose presence CI never exercises.
 func TestConfiguredLegFakesEveryAgentBinary(t *testing.T) {
 	testenv.RequireContainer(t)
-	if entrypointPath == "" {
-		t.Fatal("could not resolve the package directory at init")
-	}
-	src, err := os.ReadFile(entrypointPath)
+	// repoRootFromCaller is chdir-immune (runtime.Caller is compile-time), which
+	// matters here: this package's TestMain moves to a neutral working directory.
+	src, err := os.ReadFile(filepath.Join(repoRootFromCaller(t), "test", "container", "entrypoint.sh"))
 	if err != nil {
 		t.Fatal(err)
 	}

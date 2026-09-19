@@ -238,6 +238,17 @@ func TestConfiguredEnvLegCoversAmbientVars(t *testing.T) {
 	if !strings.Contains(ci, "recipe: [test-release, test-release-configured]") {
 		t.Error("ci.yml: the test-release matrix must run the test-release-configured recipe")
 	}
+	// The flag must cross INTO the container: the entrypoint's fake-PATH block
+	// keys off it there. Round 6 of the #271 review found it read only on the
+	// host, which left that block dead in every leg while a text-only guard
+	// stayed green — so the entrypoint also self-checks at runtime.
+	if !strings.Contains(script, `-e "AGENTSYNC_TEST_CONFIGURED_ENV=1"`) {
+		t.Error("scripts/test-in-container.sh configured leg must forward AGENTSYNC_TEST_CONFIGURED_ENV=1 into the container")
+	}
+	entrypoint := readFile(t, filepath.Join(root, "test", "container", "entrypoint.sh"))
+	if !strings.Contains(entrypoint, `"${AGENTSYNC_TEST_CONFIGURED_ENV:-}" == "1"`) || !strings.Contains(entrypoint, `command -v codex`) {
+		t.Error("test/container/entrypoint.sh must gate the fake-PATH block on AGENTSYNC_TEST_CONFIGURED_ENV and self-check that a stub resolves")
+	}
 }
 
 func moduleRoot(t *testing.T) string {

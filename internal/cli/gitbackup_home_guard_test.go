@@ -149,14 +149,14 @@ func TestRevertAgent_SkipsHomeSwallowingRoot(t *testing.T) {
 	}
 }
 
-// TestEnabledVersionRoots_LexicalAncestorOfSymlinkedHome pins the guard's second
+// TestPartitionVersionRoots_LexicalAncestorOfSymlinkedHome pins the guard's second
 // leg (#271 review round 4): when the home directory is ITSELF a symlink
 // elsewhere (`$HOME=/home/alice → /data/alice`), a declared root that is an
 // ancestor of the home's spelling (`/home`) does not contain the resolved
 // directory — identity alone would keep it and agentsync would offer to
 // `git init /home`. The lexical leg drops it. A root that is an ancestor of
 // neither spelling stays.
-func TestEnabledVersionRoots_LexicalAncestorOfSymlinkedHome(t *testing.T) {
+func TestPartitionVersionRoots_LexicalAncestorOfSymlinkedHome(t *testing.T) {
 	testenv.RequireContainer(t)
 	base := t.TempDir()
 	real := filepath.Join(base, "data", "alice")

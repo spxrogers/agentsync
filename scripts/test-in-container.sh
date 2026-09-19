@@ -119,7 +119,11 @@ if [[ "${AGENTSYNC_TEST_CONFIGURED_ENV:-}" == "1" ]]; then
     echo "==> configured-environment leg: exporting ambient AGENTSYNC_HOME / GROK_HOME / NO_COLOR / EDITOR into the container"
     # Keep this list in step with internal/testenv's ambient list;
     # TestConfiguredEnvLegCoversAmbientVars fails if a variable is missing here.
+    # The flag itself must cross into the container too: the entrypoint keys
+    # its fake-agent-binaries-on-PATH block off it (test/container/entrypoint.sh),
+    # and the entrypoint self-checks that the block actually ran.
     RUN_ARGS+=(
+        -e "AGENTSYNC_TEST_CONFIGURED_ENV=1"
         -e "AGENTSYNC_HOME=/tmp/agentsync-ambient/agentsync-home"
         -e "GROK_HOME=/tmp/agentsync-ambient/grok-home"
         -e "NO_COLOR=1"
