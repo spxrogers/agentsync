@@ -31,6 +31,14 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   disagree. The harness-only `AGENTSYNC_TEST_*` / `AGENTSYNC_LIVE_*` signals
   (all but `AGENTSYNC_TEST_IN_CONTAINER`, which a user debugging a single test
   is told to set) are listed in `CONTRIBUTING.md` instead.
+- **The declared-subset env tables are held to their word.** The user guide's
+  "ones you'll reach for most" table and the website's "Common" table are
+  checked by `TestEnvOverrideSubsetsAreSubsets`: every row must be in both
+  complete tables, and each must stay strictly smaller than them.
+- **`SECURITY.md` documents `secret edit`'s cleartext window** — the `0600`
+  temp file in the system temp dir, its removal on every exit path including
+  interrupt, and the `TMPDIR` advice for shared temp dirs — which the user
+  guide and website already described but the security policy did not.
 - The `go test -run` example in the README and `CONTRIBUTING.md` names its test
   exactly (`TestApply_FirstRunBacksUpForeignFile`).
 - **`.gitattributes`** pins `*.sh` and the `justfile` to LF in the working tree

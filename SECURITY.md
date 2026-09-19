@@ -21,8 +21,9 @@ can resolve secrets into native config files. Areas of particular interest:
   directory, socket or FIFO there *regardless* of that override — the override
   exists for setups where mode bits are meaningless, which says nothing about
   shape, and a FIFO with no writer makes the read block forever rather than fail. agentsync never writes decrypted secret
-  values to durable storage and redacts resolved `${secret:...}` values in
-  `agentsync diff`. The single dest→source write-back path (`capture.Capture`)
+  values to durable storage (the one deliberate, short-lived exception is
+  `secret edit`'s editor file — see [Sensitive files](#sensitive-files)) and
+  redacts resolved `${secret:...}` values in `agentsync diff`. The single dest→source write-back path (`capture.Capture`)
   is fail-closed: it re-references resolved secrets back to `${secret:…}` and
   **refuses the whole write** if a live secret value would still be persisted as
   cleartext — including when the backend is *locked/unavailable* and therefore
@@ -112,6 +113,16 @@ can resolve secrets into native config files. Areas of particular interest:
 Do not commit your age identity file, decrypted secrets, or
 `~/.agentsync/.state/` to a public repository. `agentsync secret set
 --stdin` keeps secret values off `argv`, shell history, and process listings.
+
+**`secret edit` has a cleartext window.** It decrypts the whole vault to a
+temp file (mode `0600`, created with `os.CreateTemp` in the system temp dir —
+`TMPDIR`, or `TMP`/`TEMP` on Windows; RAM-backed on macOS) and opens `$EDITOR`
+on it, so for as long as the editor is open your secrets exist in cleartext on
+disk. The file is removed on every exit path: a saved edit, an editor error, a
+rejected edit, and an interrupt (Ctrl-C or `kill` signals the editor, deletes
+the file, saves nothing and exits `130`). Nothing is re-encrypted until the
+editor exits cleanly. On a machine whose temp dir is shared or backed up, point
+`TMPDIR` at a private, ephemeral directory for the duration of the edit.
 
 ## Supported versions
 

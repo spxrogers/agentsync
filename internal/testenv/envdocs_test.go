@@ -31,12 +31,20 @@ type envOverrideDoc struct {
 // table) or an HTML comment.
 var envSectionEndRE = regexp.MustCompile(`(?m)^(#{1,6} |<)`)
 
-// envOverrideDocs are the two tables. docs/user-guide.md carries a deliberate
-// SUBSET ("the ones you'll reach for most") and defers to the README, so it is
-// not checked — nor is the website page's own "Common" subset.
+// envOverrideDocs are the two complete tables.
 var envOverrideDocs = []envOverrideDoc{
 	{path: "README.md", heading: "## Environment overrides"},
 	{path: "website/src/content/docs/reference/environment.mdx", heading: "## All overrides"},
+}
+
+// envOverrideSubsetDocs are the tables that declare themselves a SUBSET of the
+// complete ones ("the ones you'll reach for most") and defer to them for the
+// rest. TestEnvOverrideSubsetsAreSubsets holds them to that: every row must be
+// in both complete tables, and the table must be strictly smaller, or it has
+// silently become a third full copy that nothing keeps complete.
+var envOverrideSubsetDocs = []envOverrideDoc{
+	{path: "docs/user-guide.md", heading: "## Troubleshooting & environment overrides"},
+	{path: "website/src/content/docs/reference/environment.mdx", heading: "## Common"},
 }
 
 // envOverrideDocExempt names AGENTSYNC_-prefixed string literals in production
@@ -86,7 +94,8 @@ var envOverrideDocRequired = map[string]string{
 // (a name it builds at runtime) — are described in the prose as such, not
 // rows; `${env:NAME}` references resolve whatever the user names and are a
 // feature, not an override; and only the NAME SET is checked — a row's
-// description can drift freely. The harness's own AGENTSYNC_TEST_* /
+// description can drift freely (the declared-subset tables are held to the
+// name set too, by TestEnvOverrideSubsetsAreSubsets). The harness's own AGENTSYNC_TEST_* /
 // AGENTSYNC_LIVE_* signals are contributor-only (CONTRIBUTING.md lists them)
 // and are rejected as rows, except AGENTSYNC_TEST_IN_CONTAINER, which a user
 // debugging a single test is told to set and which the prose promises, so it
@@ -119,7 +128,7 @@ func TestEnvOverridesDocumented(t *testing.T) {
 	}
 	documented := make([]map[string]bool, len(envOverrideDocs))
 	for i, doc := range envOverrideDocs {
-		names := envTableRows(t, doc, readFile(t, filepath.Join(root, filepath.FromSlash(doc.path))))
+		names := envTableRows(t, doc, readFile(t, filepath.Join(root, filepath.FromSlash(doc.path))), minEnvTableRows)
 		documented[i] = names
 		for _, name := range sortedKeys(want) {
 			if !names[name] {
@@ -156,6 +165,35 @@ func TestEnvOverridesDocumented(t *testing.T) {
 	}
 }
 
+// TestEnvOverrideSubsetsAreSubsets enforces what the subset tables say about
+// themselves: a row there names a variable BOTH complete tables carry (so a
+// rename or removal reaches the subsets too — the user guide silently kept
+// rows that the #272 review had to reconcile by hand), and the subset stays
+// strictly smaller than the complete tables, so "the ones you'll reach for
+// most" cannot drift into an unguarded full copy.
+func TestEnvOverrideSubsetsAreSubsets(t *testing.T) {
+	root := moduleRoot(t)
+	complete := make([]map[string]bool, len(envOverrideDocs))
+	for i, doc := range envOverrideDocs {
+		complete[i] = envTableRows(t, doc, readFile(t, filepath.Join(root, filepath.FromSlash(doc.path))), minEnvTableRows)
+	}
+	for _, doc := range envOverrideSubsetDocs {
+		rows := envTableRows(t, doc, readFile(t, filepath.Join(root, filepath.FromSlash(doc.path))), 1)
+		for _, name := range sortedKeys(rows) {
+			for i, full := range complete {
+				if !full[name] {
+					t.Errorf("%s (%q): row %s is not in the complete table %s — the subset lists a variable the full reference does not", doc.path, doc.heading, name, envOverrideDocs[i].path)
+				}
+			}
+		}
+		for _, full := range complete {
+			if len(rows) >= len(full) {
+				t.Errorf("%s (%q): %d rows is not a strict subset of the %d-row complete table — it has become a full copy nothing keeps complete", doc.path, doc.heading, len(rows), len(full))
+			}
+		}
+	}
+}
+
 // envTableRowRE matches a table row whose first cell opens with a backticked
 // ALL-CAPS identifier and captures the identifier (`| `AGENTSYNC_X=1` | …` → AGENTSYNC_X).
 var envTableRowRE = regexp.MustCompile("(?m)^\\| `([A-Z][A-Z0-9_]*)")
@@ -167,8 +205,9 @@ const minEnvTableRows = 10
 
 // envTableRows returns the variable names in doc's table: the rows between its
 // heading and the next Markdown heading, HTML comment or JSX tag (`<Aside`). Fails loudly if
-// the heading is missing or the section holds too few rows to be the table.
-func envTableRows(t *testing.T, doc envOverrideDoc, text string) map[string]bool {
+// the heading is missing or the section holds fewer than minRows rows
+// (minEnvTableRows for a complete table; 1 for a declared subset).
+func envTableRows(t *testing.T, doc envOverrideDoc, text string, minRows int) map[string]bool {
 	t.Helper()
 	start := regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(doc.heading) + `\s*$`).FindStringIndex(text)
 	if start == nil {
@@ -182,7 +221,7 @@ func envTableRows(t *testing.T, doc envOverrideDoc, text string) map[string]bool
 	for _, m := range envTableRowRE.FindAllStringSubmatch(section, -1) {
 		names[m[1]] = true
 	}
-	if len(names) < minEnvTableRows {
+	if len(names) < minRows {
 		t.Fatalf("%s: found only %d env-var rows under %q — the table must sit directly under its heading (a heading of any level, an HTML comment or a JSX tag at line start ends the section), or the row format changed so `| `NAME` no longer opens each row", doc.path, len(names), doc.heading)
 	}
 	return names
