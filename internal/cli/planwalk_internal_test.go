@@ -156,7 +156,7 @@ func TestWalkPlanItems(t *testing.T) {
 			},
 		},
 		{
-			name: "orphans-are-not-cross-agent-filtered",
+			name: "orphans-exclude-a-dest-a-sibling-still-renders",
 			run: func(t *testing.T, h string) {
 				p := dest(h, "AGENTS.md")
 				mustWrite(t, p, "SHARED")
@@ -167,11 +167,21 @@ func TestWalkPlanItems(t *testing.T) {
 					"opencode": {fileOp(p, "SHARED")},
 				})
 				got := itemKeys(walkUser(h, plan, s, []string{"claude", "opencode"}, func(w *planWalk) { w.includeOrphans = true }))
-				// opencode still renders p; the walk yields claude's orphan
-				// anyway — that exclusion is reconcile's, not the walk's.
-				want := []string{"claude " + p + "!", "opencode " + p}
+				// opencode still renders p, so apply KEEPS it (#246) and the
+				// walk must not yield claude's orphan.
+				//
+				// This exclusion used to be reconcile's alone, and the walk was
+				// deliberately unfiltered. That split is what made `status`
+				// report an orphan — "will be deleted" — for a file apply was
+				// never going to touch, on every run, forever: `status
+				// --exit-code` could not return 0 after a clean apply once a
+				// shared dest was involved. The keep-set is now applied
+				// centrally (render.SharedDests), so apply, status, diff,
+				// reconcile and the removal counts all answer the same
+				// question the same way.
+				want := []string{"opencode " + p}
 				if !reflect.DeepEqual(got, want) {
-					t.Errorf("orphan set must be per agent and unfiltered: got %v want %v", got, want)
+					t.Errorf("a dest a sibling still renders must not be reported as an orphan: got %v want %v", got, want)
 				}
 			},
 		},

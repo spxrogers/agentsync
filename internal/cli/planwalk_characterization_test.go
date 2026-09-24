@@ -669,8 +669,12 @@ func planFixtures() []planFixture {
 		},
 
 		// T-19: claude owns P in state but no longer renders it; opencode still
-		// does. status shows claude's ownership view (P is an orphan for claude);
-		// reconcile EXCLUDES the orphan because another agent renders the path.
+		// does. NOBODY reports it as an orphan — not status, not diff, not
+		// reconcile — because apply keeps a dest a sibling still renders
+		// (#246), and a surface that offered to delete it would be promising
+		// something apply will never do. reconcile already excluded it; status
+		// and diff used to show claude's raw ownership view instead, which is
+		// what kept `status --exit-code` non-zero forever after a clean apply.
 		{
 			name:   "orphan/shared-dest-other-agent-renders",
 			target: func(h string) string { return dest(h, "AGENTS.md") },
@@ -694,11 +698,10 @@ func planFixtures() []planFixture {
 					agents: []sAgentProj{
 						{agent: "claude", rows: []sRow{
 							{"claude", dest(h, "CLAUDE.md"), "", "clean"},
-							{"claude", dest(h, "AGENTS.md"), "", "orphan"},
 						}},
 						{agent: "opencode", rows: []sRow{{"opencode", dest(h, "AGENTS.md"), "", "clean"}}},
 					},
-					summary: map[string]int{"clean": 2, "orphan": 1},
+					summary: map[string]int{"clean": 2},
 				}
 			},
 			wantD: func(string) dProj { return dProj{filterMatched: true} },
