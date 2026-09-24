@@ -57,6 +57,20 @@ source.Canonical
 └── Project         (overlay loaded from a <root>/.agentsync/ tree, project scope)
 ```
 
+**Units live in the canonical model, not at its edges.** Where harnesses
+disagree about what a number means, the canonical field fixes one meaning and
+the adapters convert. `Hook.Timeout` is the live example: it is **seconds**, a
+whole number greater than zero, capped at `source.MaxHookTimeout`, and `0` is
+the model's spelling of "no timeout key at all". Claude Code, Codex, Cursor and
+Grok Build document their native `timeout` in seconds and pass it straight
+through; **Gemini CLI documents milliseconds**, so its adapter multiplies on
+render and divides on ingest, refusing any native value that is not a whole
+number of seconds rather than rounding it. A canonical timeout outside the
+representable range fails the load (`loadHooks`) instead of being silently
+dropped at render, and a native one outside it is refused as *unmodelable*
+rather than *malformed* — the distinction that decides whether import retires
+the stale canonical file (§ hook retirement below).
+
 At **project scope** the same canonical is loaded a second time from the repo's
 `<root>/.agentsync/` tree (identical layout) and overlaid onto the user canonical
 by `project.Merge`: entries are merged by id/name (project wins), project memory
@@ -853,7 +867,7 @@ serialized, each classified non-secret in `walkerCovered`).
 **Hooks are filtered per HANDLER, not per event.** A canonical
 `hooks/<event>.toml` holds many handlers from many sources, so refusing a whole
 event because a plugin contributed one would silently drop the user's own. The
-join key is a content signature (event + matcher + type + command), which is what
+join key is a content signature (event + matcher + type + command + timeout), which is what
 lets import match a plugin's projected handler against the agent's native ingest —
 the ingest carries no provenance at all. Reconcile resolves hooks to no owner by
 construction: key-level write-back is implemented for MCP servers only and

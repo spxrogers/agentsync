@@ -16,8 +16,9 @@ import (
 // It is the inverse of Render: Ingest(Apply(Render(c))) round-trips to c
 // for the components agentsync manages. Hook events settings.json holds that the
 // canonical model cannot fully represent — an unmodeled definition/handler field
-// (e.g. `timeout`) or a non-command handler type — are left uncaptured with a
-// warning rather than captured as a lossy subset, matching the Gemini adapter:
+// (e.g. `statusMessage`), a non-command handler type, or a `timeout` outside
+// what source.Hook.Timeout can carry — are left uncaptured with a warning
+// rather than captured as a lossy subset, matching the Gemini adapter:
 // the next apply owns the whole per-event array, so capturing a subset would let
 // it rewrite the user's native entry without those fields.
 func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical, error) {

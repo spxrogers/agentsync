@@ -30,12 +30,12 @@ func TestIngest_HookArtifactRoundTrip(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(settings), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	// (a) PreToolUse: a command handler carrying an unmodeled field (timeout).
+	// (a) PreToolUse: a command handler carrying an unmodeled field (statusMessage).
 	// (b) Notification: a non-command ("prompt") handler.
 	// (c) PostToolUse: a clean command-only event.
 	native := `{
   "hooks": {
-    "PreToolUse": [ { "matcher": "Bash", "hooks": [ { "type": "command", "command": "echo before", "timeout": 30 } ] } ],
+    "PreToolUse": [ { "matcher": "Bash", "hooks": [ { "type": "command", "command": "echo before", "statusMessage": "starting" } ] } ],
     "Notification": [ { "matcher": "", "hooks": [ { "type": "prompt", "command": "notify me" } ] } ],
     "PostToolUse": [ { "matcher": "Write", "hooks": [ { "type": "command", "command": "echo after" } ] } ]
   }
@@ -109,10 +109,10 @@ func TestIngest_HookArtifactRoundTrip(t *testing.T) {
 		if h["command"] != "echo before" {
 			t.Errorf("PreToolUse command corrupted: %+v", h)
 		}
-		// The unmodeled timeout field must survive verbatim (it was never
+		// The unmodeled statusMessage field must survive verbatim (it was never
 		// captured, so the array was never owned/overwritten).
-		if _, ok := h["timeout"]; !ok {
-			t.Errorf("PreToolUse lost its unmodeled timeout field: %+v", h)
+		if _, ok := h["statusMessage"]; !ok {
+			t.Errorf("PreToolUse lost its unmodeled statusMessage field: %+v", h)
 		}
 	})
 
@@ -250,8 +250,13 @@ func TestIngest_HookGuardWarnsAndSkips(t *testing.T) {
 	}{
 		{
 			name:      "unmodeled handler field",
-			hooks:     `{ "PreToolUse": [ { "matcher": "Bash", "hooks": [ { "type": "command", "command": "echo before", "timeout": 30 } ] } ] }`,
-			wantWarns: []string{"unmodeled fields (\"timeout\")", "event not captured"},
+			hooks:     `{ "PreToolUse": [ { "matcher": "Bash", "hooks": [ { "type": "command", "command": "echo before", "statusMessage": "starting" } ] } ] }`,
+			wantWarns: []string{"unmodeled fields (\"statusMessage\")", "event not captured"},
+		},
+		{
+			name:      "non-integer timeout",
+			hooks:     `{ "PreToolUse": [ { "matcher": "Bash", "hooks": [ { "type": "command", "command": "echo before", "timeout": "fast" } ] } ] }`,
+			wantWarns: []string{`a "timeout" that is not a number`, "event not captured"},
 		},
 		{
 			name:      "non-command handler",
@@ -327,4 +332,86 @@ func TestIngest_HookGuardWarnsAndSkips(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestIngest_HookTimeoutRoundTrip(t *testing.T) {
+	testenv.RequireContainer(t)
+	tmp := t.TempDir()
+	settings := filepath.Join(tmp, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(settings), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	native := `{
+  "hooks": {
+    "PreToolUse": [ { "matcher": "Bash", "hooks": [ { "type": "command", "command": "echo before", "timeout": 45 } ] } ]
+  }
+}`
+	if err := os.WriteFile(settings, []byte(native), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	a := claude.New(claude.Options{TargetRoot: tmp})
+	out, err := a.Ingest(adapter.ScopeUser, "")
+	if err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+	if len(out.Hooks) != 1 {
+		t.Fatalf("expected 1 hook captured, got %d", len(out.Hooks))
+	}
+	if out.Hooks[0].Timeout != 45 {
+		t.Fatalf("expected timeout 45, got %d", out.Hooks[0].Timeout)
+	}
+
+	// Render + Apply back
+	ops, _, err := a.Render(secrets.ForRender(out), adapter.ScopeUser, "")
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	if err := a.Apply(ops, adapter.PassThroughWriter{}); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	finalRaw, err := os.ReadFile(settings)
+	if err != nil {
+		t.Fatalf("re-read: %v", err)
+	}
+	var final map[string]any
+	if err := json.Unmarshal(finalRaw, &final); err != nil {
+		t.Fatalf("parse final: %v", err)
+	}
+	h := firstRenderedHandler(t, final, "PreToolUse", finalRaw)
+	// Claude Code documents `timeout` in SECONDS, so the canonical value goes
+	// out unconverted here. (Gemini's field is milliseconds; see the
+	// cross-adapter test in the gemini package.)
+	if h["timeout"] != float64(45) {
+		t.Fatalf("expected timeout 45, got %v (%T)", h["timeout"], h["timeout"])
+	}
+}
+
+// firstRenderedHandler walks a rendered settings.json down to one event's first
+// handler object, checking each step so a shape change reports the step that
+// broke instead of panicking inside a chain of bare type assertions.
+func firstRenderedHandler(t *testing.T, doc map[string]any, event string, raw []byte) map[string]any {
+	t.Helper()
+	hooks, ok := doc["hooks"].(map[string]any)
+	if !ok {
+		t.Fatalf("\"hooks\" is %T, want an object\n%s", doc["hooks"], raw)
+	}
+	defs, ok := hooks[event].([]any)
+	if !ok || len(defs) == 0 {
+		t.Fatalf("hooks[%q] is %T (len 0?), want a non-empty array\n%s", event, hooks[event], raw)
+	}
+	def, ok := defs[0].(map[string]any)
+	if !ok {
+		t.Fatalf("hooks[%q][0] is %T, want an object\n%s", event, defs[0], raw)
+	}
+	handlers, ok := def["hooks"].([]any)
+	if !ok || len(handlers) == 0 {
+		t.Fatalf("hooks[%q][0].hooks is %T (len 0?), want a non-empty array\n%s", event, def["hooks"], raw)
+	}
+	h, ok := handlers[0].(map[string]any)
+	if !ok {
+		t.Fatalf("hooks[%q][0].hooks[0] is %T, want an object\n%s", event, handlers[0], raw)
+	}
+	return h
 }

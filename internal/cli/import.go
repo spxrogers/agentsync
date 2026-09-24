@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -1239,7 +1240,7 @@ func pluginProvided(fs afero.Fs, agentsyncHome, projectRoot string, sc adapter.S
 }
 
 // hookSignature identifies one hook HANDLER by everything that reaches a
-// destination: its event, matcher, type, and command. It is the join key between
+// destination: its event, matcher, type, command, and timeout. It is the join key between
 // a plugin's projected hooks (which carry provenance) and the agent's native
 // ingest (which does not), so import can drop exactly the handlers a plugin
 // contributed and keep the ones the user wrote.
@@ -1254,7 +1255,7 @@ func pluginProvided(fs afero.Fs, agentsyncHome, projectRoot string, sc adapter.S
 // collision is impossible rather than merely unlikely.
 func hookSignature(h source.Hook) string {
 	var b strings.Builder
-	for _, part := range []string{h.Event.Unverified(), h.Matcher, h.Type, h.Command} {
+	for _, part := range []string{h.Event.Unverified(), h.Matcher, h.Type, h.Command, strconv.Itoa(h.Timeout)} {
 		fmt.Fprintf(&b, "%d:%s", len(part), part)
 	}
 	return b.String()

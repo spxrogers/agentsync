@@ -37,6 +37,10 @@ func MergeTOML(existing []byte, ours map[string]any, ownedPointers []string) ([]
 			existingMap = map[string]any{}
 		}
 	}
+	// go-toml treats json.Number (from jsonkeys.DecodeObject's UseNumber) as a
+	// string; convert numbers back to int64 / float64 so native numeric fields
+	// (hook timeout, MCP extra timeouts/ports) serialize as TOML integers/floats.
+	jsonkeys.ConvertNumbers(ours)
 	merged, _, _ := jsonkeys.MergeKeys(existingMap, ours, ownedPointers)
 	out, err := toml.Marshal(merged)
 	if err != nil {

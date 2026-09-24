@@ -147,7 +147,7 @@ func TestRoundTrip_Hooks(t *testing.T) {
 	tmp := t.TempDir()
 	a := cursor.New(cursor.Options{TargetRoot: tmp})
 	in := source.Canonical{Hooks: []source.Hook{
-		{Event: "PreToolUse", Matcher: "Shell", Type: "command", Command: "echo a"},
+		{Event: "PreToolUse", Matcher: "Shell", Type: "command", Command: "echo a", Timeout: 30},
 		{Event: "SessionStart", Type: "command", Command: "echo b"},
 	}}
 	renderApply(t, a, in, adapter.ScopeUser, "")
@@ -155,16 +155,19 @@ func TestRoundTrip_Hooks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	type hk struct{ e, m, t_, c string }
+	type hk struct {
+		e, m, t_, c string
+		timeout     int
+	}
 	norm := func(hs []source.Hook) []hk {
 		out := make([]hk, 0, len(hs))
 		for _, h := range hs {
-			out = append(out, hk{h.Event.Unverified(), h.Matcher, h.Type, h.Command})
+			out = append(out, hk{h.Event.Unverified(), h.Matcher, h.Type, h.Command, h.Timeout})
 		}
 		sort.Slice(out, func(i, j int) bool { return out[i].e < out[j].e })
 		return out
 	}
-	want := []hk{{"PreToolUse", "Shell", "command", "echo a"}, {"SessionStart", "", "command", "echo b"}}
+	want := []hk{{"PreToolUse", "Shell", "command", "echo a", 30}, {"SessionStart", "", "command", "echo b", 0}}
 	if g := norm(got.Hooks); !reflect.DeepEqual(g, want) {
 		t.Fatalf("hooks round-trip mismatch:\n got %+v\nwant %+v", g, want)
 	}
@@ -172,7 +175,7 @@ func TestRoundTrip_Hooks(t *testing.T) {
 
 // TestIngest_Hooks_SkipsUnrepresentableEvents is the fidelity guard for the hooks
 // capture path: Cursor's documented entry schema is wider than source.Hook
-// (prompt-type hooks; timeout/failClosed/loop_limit fields), and apply owns the
+// (prompt-type hooks; failClosed/loop_limit fields), and apply owns the
 // whole per-event array — so capturing a lossy subset would let the next apply
 // rewrite the user's native entry without those fields. Ingest must instead leave
 // the WHOLE event uncaptured, with a warning, while still capturing sibling
@@ -188,7 +191,7 @@ func TestIngest_Hooks_SkipsUnrepresentableEvents(t *testing.T) {
   "version": 1,
   "hooks": {
     "preToolUse": [ { "command": "echo ok", "matcher": "Shell" } ],
-    "postToolUse": [ { "command": "echo slow", "timeout": 30 } ],
+    "postToolUse": [ { "command": "echo slow", "failClosed": true } ],
     "sessionStart": [ { "type": "prompt", "prompt": "review the diff", "model": "fast" } ],
     "afterFileEdit": [ { "command": "./format.sh" } ]
   }
@@ -209,7 +212,7 @@ func TestIngest_Hooks_SkipsUnrepresentableEvents(t *testing.T) {
 	}
 	out := warn.String()
 	for _, wantMsg := range []string{
-		`unmodeled fields ("timeout")`,
+		`unmodeled fields ("failClosed")`,
 		`"prompt"-type entry`,
 		`"afterFileEdit" has no canonical equivalent`,
 	} {

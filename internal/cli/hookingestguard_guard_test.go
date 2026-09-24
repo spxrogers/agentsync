@@ -130,13 +130,13 @@ func TestHookIngestGuard_ReportsCanonicalNames(t *testing.T) {
 }
 
 // injectUnmodeledField walks any decoded JSON value and adds an unmodeled
-// "timeout" field to every object that carries a "command" key — the handler
+// "statusMessage" field to every object that carries a "command" key — the handler
 // objects, wherever an adapter's native hook shape nests them.
 func injectUnmodeledField(v any) {
 	switch x := v.(type) {
 	case map[string]any:
 		if _, ok := x["command"]; ok {
-			x["timeout"] = 30
+			x["statusMessage"] = "starting"
 		}
 		for _, child := range x {
 			injectUnmodeledField(child)

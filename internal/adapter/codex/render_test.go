@@ -3,6 +3,7 @@ package codex_test
 import (
 	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -11,6 +12,7 @@ import (
 	"github.com/spxrogers/agentsync/internal/adapter/codex"
 	"github.com/spxrogers/agentsync/internal/secrets"
 	"github.com/spxrogers/agentsync/internal/source"
+	"github.com/spxrogers/agentsync/internal/untrusted"
 )
 
 // TestProjectScope_EmptyProjectErrors pins the adapter-boundary guard for Codex:
@@ -468,6 +470,59 @@ func TestRenderHooks_NonCommandHandlerSkipped(t *testing.T) {
 	}
 	if !sawSkip {
 		t.Fatalf("expected a reduced hook skip for the non-command handler, got %+v", skips)
+	}
+}
+
+func TestRender_Hooks_TimeoutRoundTrip(t *testing.T) {
+	tmp := t.TempDir()
+	c := source.Canonical{
+		Hooks: []source.Hook{
+			{
+				Event:   untrusted.Wrap("PreToolUse"),
+				Matcher: "Bash",
+				Type:    "command",
+				Command: "echo fast",
+				Timeout: 30,
+			},
+		},
+	}
+	a := codex.New(codex.Options{TargetRoot: tmp})
+	ops, _, err := a.Render(secrets.ForRender(c), adapter.ScopeUser, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	op := findOp(ops, "config.toml")
+	if op == nil {
+		t.Fatal("config.toml op missing")
+	}
+	// Apply through adapter to test real MergeTOML writing
+	if err := a.Apply(ops, adapter.PassThroughWriter{}); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	configPath := filepath.Join(tmp, ".codex", "config.toml")
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Ensure timeout is formatted as integer in TOML (not string '30')
+	content := string(data)
+	if strings.Contains(content, "'30'") || strings.Contains(content, `"30"`) {
+		t.Fatalf("timeout rendered as string in config.toml:\n%s", content)
+	}
+	if !strings.Contains(content, "timeout = 30") {
+		t.Fatalf("timeout = 30 missing in config.toml:\n%s", content)
+	}
+
+	// Now Ingest back and verify Timeout is captured
+	ingested, err := a.Ingest(adapter.ScopeUser, "")
+	if err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+	if len(ingested.Hooks) != 1 {
+		t.Fatalf("expected 1 hook ingested, got %d", len(ingested.Hooks))
+	}
+	if ingested.Hooks[0].Timeout != 30 {
+		t.Fatalf("expected Timeout=30, got %d", ingested.Hooks[0].Timeout)
 	}
 }
 

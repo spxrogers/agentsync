@@ -26,12 +26,37 @@ func TestRefusedHookEvents_StructuralVsSemantic(t *testing.T) {
 		wantRefused bool
 	}{
 		{
+			// 30000 MILLISECONDS — Gemini's unit — is 30 canonical seconds.
+			"modeled: timeout with command is representable",
+			`{ "BeforeTool": [ { "matcher": "Bash", "hooks": [ { "type": "command", "command": "x", "timeout": 30000 } ] } ] }`, false,
+		},
+		{
+			// A value that is not a whole number of seconds is refused rather
+			// than rounded, and it is SEMANTIC: the native shape is perfectly
+			// valid Gemini, agentsync simply cannot carry it, so the event must
+			// still retire its stale canonical file.
+			"semantic: sub-second timeout is refused, not rounded",
+			`{ "BeforeTool": [ { "matcher": "Bash", "hooks": [ { "type": "command", "command": "x", "timeout": 1500 } ] } ] }`, true,
+		},
+		{
+			"semantic: a bare 30 is 30ms, under one second",
+			`{ "BeforeTool": [ { "matcher": "Bash", "hooks": [ { "type": "command", "command": "x", "timeout": 30 } ] } ] }`, true,
+		},
+		{
+			"semantic: negative timeout",
+			`{ "BeforeTool": [ { "matcher": "Bash", "hooks": [ { "type": "command", "command": "x", "timeout": -1000 } ] } ] }`, true,
+		},
+		{
+			"semantic: explicit zero timeout",
+			`{ "BeforeTool": [ { "matcher": "Bash", "hooks": [ { "type": "command", "command": "x", "timeout": 0 } ] } ] }`, true,
+		},
+		{
 			"semantic: unmodeled def field",
 			`{ "BeforeTool": [ { "matcher": "Bash", "sequential": true, "hooks": [ { "type": "command", "command": "x" } ] } ] }`, true,
 		},
 		{
 			"semantic: unmodeled handler field",
-			`{ "BeforeTool": [ { "matcher": "Bash", "hooks": [ { "type": "command", "command": "x", "timeout": 30 } ] } ] }`, true,
+			`{ "BeforeTool": [ { "matcher": "Bash", "hooks": [ { "type": "command", "command": "x", "name": "my-handler" } ] } ] }`, true,
 		},
 		{
 			"semantic: non-command handler",
@@ -43,15 +68,23 @@ func TestRefusedHookEvents_StructuralVsSemantic(t *testing.T) {
 		},
 		{
 			"semantic: unmodeled handler field without a command (unmodeled wins over the absent-command structural check)",
-			`{ "BeforeTool": [ { "matcher": "Bash", "hooks": [ { "type": "command", "timeout": 30 } ] } ] }`, true,
+			`{ "BeforeTool": [ { "matcher": "Bash", "hooks": [ { "type": "command", "name": "my-handler" } ] } ] }`, true,
 		},
 		{
 			"semantic: unmodeled handler field with a non-string command (unmodeled wins over the non-string-command structural check)",
-			`{ "BeforeTool": [ { "matcher": "Bash", "hooks": [ { "type": "command", "command": 123, "timeout": 30 } ] } ] }`, true,
+			`{ "BeforeTool": [ { "matcher": "Bash", "hooks": [ { "type": "command", "command": 123, "name": "my-handler" } ] } ] }`, true,
 		},
 		{
 			"semantic: typeless converted engine shape (unmodeled field, no type, no command)",
 			`{ "BeforeTool": [ { "matcher": "Bash", "hooks": [ { "prompt": "do it" } ] } ] }`, true,
+		},
+		{
+			"structural: modeled timeout without a command",
+			`{ "BeforeTool": [ { "matcher": "Bash", "hooks": [ { "type": "command", "timeout": 30000 } ] } ] }`, false,
+		},
+		{
+			"structural: non-integer timeout",
+			`{ "BeforeTool": [ { "matcher": "Bash", "hooks": [ { "type": "command", "command": "x", "timeout": "fast" } ] } ] }`, false,
 		},
 		{
 			"structural: event value not an array",
@@ -87,7 +120,7 @@ func TestRefusedHookEvents_StructuralVsSemantic(t *testing.T) {
 		},
 		{
 			"gemini-only event is never refused, even on semantic content",
-			`{ "BeforeModel": [ { "matcher": "x", "hooks": [ { "type": "command", "command": "x", "timeout": 30 } ] } ] }`, false,
+			`{ "BeforeModel": [ { "matcher": "x", "hooks": [ { "type": "command", "command": "x", "name": "my-handler" } ] } ] }`, false,
 		},
 	}
 	for _, tt := range tests {
@@ -143,6 +176,10 @@ func TestIngest_RefusesMalformedEntryShapes(t *testing.T) {
 		{
 			"absent command",
 			`{ "BeforeTool": [ { "matcher": "Bash", "hooks": [ { "type": "command" } ] } ] }`,
+		},
+		{
+			"non-integer timeout",
+			`{ "BeforeTool": [ { "matcher": "Bash", "hooks": [ { "type": "command", "command": "x", "timeout": "fast" } ] } ] }`,
 		},
 	}
 	for _, tt := range tests {

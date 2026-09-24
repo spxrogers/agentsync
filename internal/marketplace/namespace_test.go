@@ -384,6 +384,19 @@ func TestDedupHooks_KeysOnContentNotProvenance(t *testing.T) {
 	if got := dedupHooks([]source.Hook{mk("a"), other}); len(got) != 2 {
 		t.Fatalf("distinct handlers must not be collapsed; got %d: %+v", len(got), got)
 	}
+	// Timeout is part of what reaches a destination, so two handlers that
+	// differ only by it are NOT duplicates. Leaving it out of the key would
+	// collapse them and hand the survivor's timeout to both.
+	slow := mk("a")
+	slow.Timeout = 60
+	if got := dedupHooks([]source.Hook{mk("a"), slow}); len(got) != 2 {
+		t.Fatalf("handlers differing only by timeout must not be collapsed; got %d: %+v", len(got), got)
+	}
+	fast, alsoFast := mk("a"), mk("b")
+	fast.Timeout, alsoFast.Timeout = 30, 30
+	if got := dedupHooks([]source.Hook{fast, alsoFast}); len(got) != 1 {
+		t.Fatalf("handlers identical including timeout must collapse; got %d: %+v", len(got), got)
+	}
 }
 
 // TestNamespaceProjected_StampsTargetingOnEveryKind is the mechanical guard for

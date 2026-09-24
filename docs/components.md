@@ -240,7 +240,8 @@ untouched. The asymmetry is the cross-adapter rule, not a Claude quirk — see
 [architecture.md § PluginIngester (read-only)](architecture.md#pluginingester-read-only).
 Hook fidelity: the canonical `Hook` models only command handlers, so (like
 Gemini) Ingest leaves a `settings.json` hook event uncaptured with a warning if
-it carries an unmodeled definition/handler field (e.g. `timeout`) or a
+it carries an unmodeled definition/handler field (e.g. `statusMessage`), a
+`timeout` outside what `Hook.Timeout` can carry, or a
 non-command handler, and Render reports a dropped `Skip` for any non-command
 hook rather than emitting an empty-command entry. An event that was captured
 while clean and *later* enriched natively would leave a stale canonical

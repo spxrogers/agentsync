@@ -363,7 +363,10 @@ first-class. Layout:
 ├── subagents/<name>.md       # one subagent per file (NOT `agents/` — that
 │                             #   word names the harness registry in agentsync.toml)
 ├── commands/<name>.md        # one slash command per file
-├── hooks/<event>.toml        # one hook per file
+├── hooks/<event>.toml        # one event per file; each [[hook]] takes
+│                             #   matcher/type/command + optional timeout
+│                             #   (whole SECONDS; omit or 0 for none — Gemini's
+│                             #   millisecond field is converted for you)
 ├── marketplaces/<name>.toml  # one marketplace per file (its `head_sha`/`name`
 │                             #   keys are CLI fetch-cache metadata, regenerated on
 │                             #   fetch — not modeled in the canonical schema)

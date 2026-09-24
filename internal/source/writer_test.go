@@ -3,6 +3,7 @@ package source_test
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/pelletier/go-toml/v2"
@@ -190,5 +191,110 @@ func TestWriteMarketplace_RoundTrip(t *testing.T) {
 	}
 	if got.Marketplace.URL != "https://example.com/registry" {
 		t.Errorf("url = %q", got.Marketplace.URL)
+	}
+}
+
+func TestWriteHooks_RoundTripPinsTimeout(t *testing.T) {
+	home := t.TempDir()
+
+	hooks := []source.Hook{
+		{
+			Matcher: "Bash",
+			Type:    "command",
+			Command: "echo fast",
+			Timeout: 10,
+		},
+		{
+			Matcher: "Write|Edit",
+			Type:    "command",
+			Command: "echo slow",
+			Timeout: 60,
+		},
+	}
+	if err := source.WriteHooks(home, "PreToolUse", hooks); err != nil {
+		t.Fatalf("WriteHooks: %v", err)
+	}
+
+	dest := filepath.Join(home, "hooks", "PreToolUse.toml")
+	data, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+
+	fs := afero.NewOsFs()
+	loaded, err := source.Load(fs, home)
+	if err != nil {
+		t.Fatalf("source.Load: %v\ncontent:\n%s", err, data)
+	}
+	if len(loaded.Hooks) != 2 {
+		t.Fatalf("expected 2 hooks, got %d", len(loaded.Hooks))
+	}
+	if loaded.Hooks[0].Timeout != 10 || loaded.Hooks[0].Command != "echo fast" {
+		t.Errorf("hook 0 timeout corrupted: %+v", loaded.Hooks[0])
+	}
+	if loaded.Hooks[1].Timeout != 60 || loaded.Hooks[1].Command != "echo slow" {
+		t.Errorf("hook 1 timeout corrupted: %+v", loaded.Hooks[1])
+	}
+
+	// Assert the BYTES, not just the reparsed model: a writer and loader that
+	// share a mistake (a quoted number, say) round-trip through each other
+	// perfectly while producing a file no one else can read.
+	if !strings.Contains(string(data), "timeout = 10") {
+		t.Errorf("timeout must serialize as a bare TOML integer; got:\n%s", data)
+	}
+	if strings.Contains(string(data), `timeout = "10"`) || strings.Contains(string(data), "timeout = '10'") {
+		t.Errorf("timeout serialized as a TOML string; got:\n%s", data)
+	}
+}
+
+// TestWriteHooks_ZeroTimeoutOmitsTheKey pins that a canonical hook with no
+// timeout writes a file identical to one written before the field existed —
+// `omitempty` doing its job — so upgrading agentsync does not rewrite every
+// user's hooks/<event>.toml.
+func TestWriteHooks_ZeroTimeoutOmitsTheKey(t *testing.T) {
+	home := t.TempDir()
+	hooks := []source.Hook{{Matcher: "Bash", Type: "command", Command: "echo hi"}}
+	if err := source.WriteHooks(home, "PreToolUse", hooks); err != nil {
+		t.Fatalf("WriteHooks: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(home, "hooks", "PreToolUse.toml"))
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if strings.Contains(string(data), "timeout") {
+		t.Errorf("a zero timeout must omit the key entirely; got:\n%s", data)
+	}
+}
+
+// TestLoadHooks_RejectsUnrepresentableTimeout pins that a hand-written timeout
+// the renderers cannot emit fails the load with a message naming the file,
+// instead of being silently discarded by SetHookTimeout's `> 0` guard and
+// leaving the hook on the harness default forever.
+func TestLoadHooks_RejectsUnrepresentableTimeout(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		toml string
+	}{
+		{name: "negative", toml: "[[hook]]\nmatcher = \"Bash\"\ntype = \"command\"\ncommand = \"x\"\ntimeout = -5\n"},
+		{name: "beyond the ceiling", toml: "[[hook]]\nmatcher = \"Bash\"\ntype = \"command\"\ncommand = \"x\"\ntimeout = 99999999999\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			if err := os.MkdirAll(filepath.Join(home, "hooks"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(home, "hooks", "PreToolUse.toml"), []byte(tc.toml), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			_, err := source.Load(afero.NewOsFs(), home)
+			if err == nil {
+				t.Fatal("load accepted a timeout no renderer can emit; want an error")
+			}
+			for _, want := range []string{"PreToolUse.toml", "timeout"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("error must name %q so the user can act on it; got: %v", want, err)
+				}
+			}
+		})
 	}
 }

@@ -244,9 +244,12 @@ func dedupHooks(hooks []source.Hook) []source.Hook {
 	// namespaceProjected stamps provenance after this runs, so every hook here
 	// shares one value — keying explicitly keeps that ordering from becoming
 	// load-bearing.)
-	type hookContent struct{ event, matcher, typ, command string }
+	type hookContent struct {
+		event, matcher, typ, command string
+		timeout                      int
+	}
 	key := func(h source.Hook) hookContent {
-		return hookContent{h.Event.Unverified(), h.Matcher, h.Type, h.Command}
+		return hookContent{h.Event.Unverified(), h.Matcher, h.Type, h.Command, h.Timeout}
 	}
 	seen := make(map[hookContent]bool, len(hooks))
 	out := make([]source.Hook, 0, len(hooks))
@@ -996,18 +999,21 @@ func applyHooks(hooks any, pr *ProjectionResult, cacheDir string) {
 	}
 	switch v := hooks.(type) {
 	case string:
-		appendCommandHook(pr, "PreToolUse", "*", "command", v, cacheDir)
+		// A bare command string carries no timeout, so the hook runs on the
+		// harness default — the same as every plugin hook did before
+		// Hook.Timeout existed.
+		appendCommandHook(pr, "PreToolUse", "*", "command", v, cacheDir, 0)
 	case []any:
 		for _, item := range v {
 			if s, ok := item.(string); ok {
-				appendCommandHook(pr, "PreToolUse", "*", "command", s, cacheDir)
+				appendCommandHook(pr, "PreToolUse", "*", "command", s, cacheDir, 0)
 			}
 		}
 	case map[string]any:
 		for event, val := range v {
 			switch ev := val.(type) {
 			case string:
-				appendCommandHook(pr, event, "*", "command", ev, cacheDir)
+				appendCommandHook(pr, event, "*", "command", ev, cacheDir, 0)
 			case map[string]any:
 				appendHookGroup(pr, event, ev, cacheDir)
 			case []any:
@@ -1042,7 +1048,7 @@ func appendHookGroup(pr *ProjectionResult, event string, group map[string]any, c
 				typ = "command"
 			}
 			cmd, _ := m["command"].(string)
-			appendCommandHook(pr, event, matcher, typ, cmd, cacheDir)
+			appendCommandHook(pr, event, matcher, typ, cmd, cacheDir, pluginHookTimeout(m, event))
 		}
 		return
 	}
@@ -1051,14 +1057,36 @@ func appendHookGroup(pr *ProjectionResult, event string, group map[string]any, c
 		typ = "command"
 	}
 	cmd, _ := group["command"].(string)
-	appendCommandHook(pr, event, matcher, typ, cmd, cacheDir)
+	appendCommandHook(pr, event, matcher, typ, cmd, cacheDir, pluginHookTimeout(group, event))
+}
+
+// pluginHookTimeout reads a plugin hook entry's "timeout". Plugin hooks use
+// Claude's format, so the unit is SECONDS, matching the canonical field.
+//
+// A value the canonical model cannot carry is logged and dropped rather than
+// failing the whole projection: unlike a canonical hooks/<event>.toml, which is
+// the user's own file and fails the load loudly, a plugin manifest is
+// third-party content that one bad entry must not make unusable. The log line
+// is what keeps it from being a SILENT drop.
+func pluginHookTimeout(m map[string]any, event string) int {
+	raw, present := m["timeout"]
+	if !present {
+		return 0
+	}
+	n, res := source.HookTimeoutNumber(raw)
+	if res != source.HookTimeoutOK || n == 0 {
+		slog.Warn("plugin hook timeout not representable; projecting without it",
+			"event", event, "timeout", raw)
+		return 0
+	}
+	return int(n)
 }
 
 // appendCommandHook appends a single hook, resolving ${CLAUDE_PLUGIN_ROOT} in the
 // command. An entry with no command is skipped rather than projected as an empty,
 // no-op hook — this also drops the hook types agentsync's command-only Hook model
 // does not represent (http/mcp_tool/prompt/agent), which carry no shell command.
-func appendCommandHook(pr *ProjectionResult, event, matcher, typ, command, cacheDir string) {
+func appendCommandHook(pr *ProjectionResult, event, matcher, typ, command, cacheDir string, timeout int) {
 	if command == "" {
 		return
 	}
@@ -1067,6 +1095,7 @@ func appendCommandHook(pr *ProjectionResult, event, matcher, typ, command, cache
 		Matcher: matcher,
 		Type:    typ,
 		Command: resolvePluginRoot(command, cacheDir),
+		Timeout: timeout,
 	})
 }
 

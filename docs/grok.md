@@ -88,7 +88,8 @@ the originals active would execute them twice. To manage an existing hook,
 move it into `agentsync.json` before importing it.
 
 Native handlers with fields the canonical model cannot represent, such as
-`timeout` or an HTTP handler's `url`, are refused as a whole event with a warning.
+an HTTP handler's `url`, are refused as a whole event with a warning.
+Command timeouts are modeled directly and round-trip faithfully.
 Import retires previously captured stale events and relinquishes ownership, so
 the next apply preserves the enriched native hook. Malformed handlers warn and
 are not captured, but do not trigger destructive retirement.

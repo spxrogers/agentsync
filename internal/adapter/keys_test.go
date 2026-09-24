@@ -42,3 +42,6 @@ func TestUnmodeledKeys(t *testing.T) {
 		t.Fatalf("nil modeled set must treat every key as unmodeled, got %v", got)
 	}
 }
+
+// ParseHookTimeout / SetHookTimeout and their millisecond twins moved to
+// hook_fields.go; their tests live in hook_fields_test.go.

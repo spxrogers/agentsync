@@ -413,6 +413,7 @@ type hookEntry struct {
 	Matcher string `toml:"matcher"`
 	Type    string `toml:"type"`
 	Command string `toml:"command"`
+	Timeout int    `toml:"timeout,omitempty"`
 }
 
 // loadHooks walks hooks/<event>.toml files. Each file corresponds to one
@@ -443,11 +444,20 @@ func loadHooks(fs afero.Fs, home string) ([]Hook, error) {
 			return nil, err
 		}
 		for _, h := range hf.Hook {
+			// A timeout the renderers cannot emit fails the load instead of
+			// being quietly discarded by SetHookTimeout's `> 0` guard: a
+			// hand-written `timeout = -5` is a mistake the user wants to hear
+			// about, not a silent no-op that leaves the hook on the harness
+			// default forever.
+			if !ValidHookTimeout(h.Timeout) {
+				return nil, fmt.Errorf("read %s: hook timeout %d is out of range (want 0..%d seconds, 0 for none)", p, h.Timeout, MaxHookTimeout)
+			}
 			out = append(out, Hook{
 				Event:   untrusted.Wrap(event),
 				Matcher: h.Matcher,
 				Type:    h.Type,
 				Command: h.Command,
+				Timeout: h.Timeout,
 			})
 		}
 	}

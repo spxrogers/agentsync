@@ -56,6 +56,12 @@ canonical location with `AGENTSYNC_HOME`.
 There is **no hidden internal representation** — the Go structs that parse these
 TOML files *are* the canonical model.
 
+Because the model is the contract, it also fixes the **units** a field is
+written in, and adapters convert for any harness that disagrees. A hook's
+`timeout` in `hooks/<event>.toml` is always whole **seconds** (omit it, or leave
+it `0`, for no timeout) even though Gemini CLI's native field counts
+milliseconds — you write seconds once, and each agent gets what it expects.
+
 ### Adapter
 A per-agent translator. Each adapter knows how to **render** the canonical model
 into one agent's native config format and how to **ingest** that native config

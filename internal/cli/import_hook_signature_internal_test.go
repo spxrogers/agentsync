@@ -52,4 +52,11 @@ func TestHookSignature_Injective(t *testing.T) {
 	if hookSignature(victim) == hookSignature(mk("PostToolUse", "Bash", "command", "mine")) {
 		t.Error("handlers on different events must not share a signature")
 	}
+
+	// Handlers differing only in timeout must produce different signatures.
+	withTimeout := victim
+	withTimeout.Timeout = 30
+	if hookSignature(victim) == hookSignature(withTimeout) {
+		t.Error("handlers with different timeouts must not share a signature")
+	}
 }

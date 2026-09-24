@@ -125,6 +125,13 @@ func (a *Adapter) renderHooks(c source.Canonical, p Paths) ([]adapter.FileOp, []
 		if h.Type != "" {
 			handler["type"] = h.Type
 		}
+		// MILLISECONDS, unlike every other hook-capable adapter. Gemini's hooks
+		// reference defines this field as "Execution timeout in milliseconds
+		// (default: 60000)"; Claude Code, Codex, Cursor and Grok Build all
+		// document seconds, which is what the canonical Hook.Timeout carries.
+		// Emitting the canonical number unconverted would turn a 30-second
+		// timeout into 30ms and kill the user's hook on contact.
+		adapter.SetHookTimeoutMillis(handler, h.Timeout)
 		// Coalesce with the previous group iff this Hook shares its (event,
 		// matcher) — reconstructing the native multi-handler group (one group, an
 		// N-element `hooks` array) rather than exploding into N single-handler
@@ -164,12 +171,14 @@ func (a *Adapter) renderHooks(c source.Canonical, p Paths) ([]adapter.FileOp, []
 }
 
 // Gemini's documented hook schema is wider than the canonical source.Hook:
-// definitions can carry `sequential`, and individual handlers `name`/`timeout`.
+// definitions can carry `sequential`, and individual handlers `name`. `timeout`
+// IS modeled, but in MILLISECONDS on this side of the boundary — see the unit
+// note on renderHooks.
 // These enumerate the fields the canonical model CAN represent; anything else in
 // an event makes that event unrepresentable — see ingestHooks.
 var (
 	geminiHookDefModeledKeys   = map[string]bool{"matcher": true, "hooks": true}
-	geminiHookEntryModeledKeys = map[string]bool{"type": true, "command": true}
+	geminiHookEntryModeledKeys = map[string]bool{"type": true, "command": true, "timeout": true}
 )
 
 // ingestHooks decodes settings.json's `hooks` object into canonical hooks,
@@ -181,7 +190,8 @@ var (
 // exist for it, so there is nothing for import to retire. For a mappable
 // event, if ANY definition carries an unmodeled key (`sequential`), or ANY
 // handler is a non-empty non-"command" type, or ANY handler carries an
-// unmodeled key (`name`, `timeout`, …), the WHOLE event is left uncaptured
+// unmodeled key (`name`, …), or ANY handler's `timeout` is not a whole number
+// of seconds the canonical int can carry, the WHOLE event is left uncaptured
 // with a warning: capturing a lossy subset would let the next apply — which
 // owns the whole per-event array — rewrite the user's native entry without
 // those fields.
@@ -300,11 +310,21 @@ func ingestHooks(raw any, warn io.Writer) (out []source.Hook, refused []string) 
 					structural = true
 					break defs
 				}
+				// Gemini counts this field in MILLISECONDS; the canonical model
+				// is seconds. See the unit note on renderHooks.
+				timeout, tres := adapter.ParseHookTimeoutMillis(h)
+				if tres != source.HookTimeoutOK {
+					fmt.Fprintf(warn, "warning: hook event %q has a handler with %s; event not captured\n", geminiEvent, tres.Reason())
+					representable = false
+					structural = tres.Structural()
+					break defs
+				}
 				captured = append(captured, source.Hook{
 					Event:   untrusted.Wrap(canonEvent), // remapped from native config
 					Matcher: matcher,
 					Type:    asStr(h["type"]),
 					Command: asStr(h["command"]),
+					Timeout: timeout,
 				})
 			}
 		}

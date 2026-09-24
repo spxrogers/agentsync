@@ -43,12 +43,14 @@ func (a *Adapter) renderHooks(c source.Canonical, p Paths) ([]adapter.FileOp, []
 			})
 			continue
 		}
+		handler := map[string]any{
+			"type":    h.Type,
+			"command": h.Command,
+		}
+		adapter.SetHookTimeout(handler, h.Timeout)
 		entry := map[string]any{
 			"matcher": h.Matcher,
-			"hooks": []map[string]any{{
-				"type":    h.Type,
-				"command": h.Command,
-			}},
+			"hooks":   []map[string]any{handler},
 		}
 		// event is a machine map key / owned-key stem — raw, not the sanitizing String().
 		event := h.Event.Unverified()
@@ -79,12 +81,12 @@ func (a *Adapter) renderHooks(c source.Canonical, p Paths) ([]adapter.FileOp, []
 
 // Claude's documented hook schema is wider than the canonical source.Hook: a
 // per-event definition can carry keys beyond {matcher, hooks} and an individual
-// handler keys beyond {type, command} (e.g. `timeout`). These enumerate the
-// fields the canonical model CAN represent; anything else in an event makes that
-// event unrepresentable — see ingestHooks.
+// handler keys beyond {type, command, timeout} (e.g. `statusMessage`). These
+// enumerate the fields the canonical model CAN represent; anything else in an
+// event makes that event unrepresentable — see ingestHooks.
 var (
 	claudeHookDefModeledKeys   = map[string]bool{"matcher": true, "hooks": true}
-	claudeHookEntryModeledKeys = map[string]bool{"type": true, "command": true}
+	claudeHookEntryModeledKeys = map[string]bool{"type": true, "command": true, "timeout": true}
 )
 
 // ingestHooks decodes settings.json's `hooks` object into canonical hooks,
@@ -93,14 +95,17 @@ var (
 // Unlike Gemini there is NO event-name remapping — every Claude event name is
 // canonical. Per event, if ANY definition carries an unmodeled key, or ANY
 // handler is a non-empty non-"command" type, or ANY handler carries an unmodeled
-// key (e.g. `timeout`), the WHOLE event is left uncaptured with a warning.
+// key (e.g. `statusMessage`), or ANY handler's `timeout` is a value the
+// canonical int cannot carry, the WHOLE event is left uncaptured with a warning.
 //
-// APPROACH A (no schema change): mirror the Gemini adapter's guard-and-warn
-// posture rather than widen source.Hook. Capturing a lossy subset would let the
-// next apply — which owns the whole per-event array — rewrite the user's native
-// entry without the dropped fields; Render is the last line of defense (it skips
-// non-command handlers), and this ingest guard keeps unrepresentable events out
-// of the canonical source in the first place.
+// `timeout` itself IS modeled (source.Hook.Timeout, in seconds — Claude
+// documents this field in seconds). Everything still outside the model keeps
+// the guard-and-warn posture rather than widening source.Hook further:
+// capturing a lossy subset would let the next apply — which owns the whole
+// per-event array — rewrite the user's native entry without the dropped fields;
+// Render is the last line of defense (it skips non-command handlers), and this
+// ingest guard keeps unrepresentable events out of the canonical source in the
+// first place.
 //
 // Gemini's twin carries the same structural diagnostics and refusal reporting
 // (parity landed with the epic #178 residual close); its refused list maps
@@ -220,11 +225,19 @@ func ingestHooks(raw any, warn io.Writer) (out []source.Hook, refused []string) 
 					structural = true
 					break defs
 				}
+				timeout, tres := adapter.ParseHookTimeout(h)
+				if tres != source.HookTimeoutOK {
+					fmt.Fprintf(warn, "warning: hook event %q has a handler with %s; event not captured\n", event, tres.Reason())
+					representable = false
+					structural = tres.Structural()
+					break defs
+				}
 				captured = append(captured, source.Hook{
 					Event:   untrusted.Wrap(event), // native settings.json map key
 					Matcher: matcher,
 					Type:    asStr(h["type"]),
 					Command: asStr(h["command"]),
+					Timeout: timeout,
 				})
 			}
 		}

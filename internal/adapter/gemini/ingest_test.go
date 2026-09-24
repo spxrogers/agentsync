@@ -82,7 +82,7 @@ func TestRoundTrip_Hooks(t *testing.T) {
 	tmp := t.TempDir()
 	a := gemini.New(gemini.Options{TargetRoot: tmp})
 	in := source.Canonical{Hooks: []source.Hook{
-		{Event: "PreToolUse", Matcher: "write_file", Type: "command", Command: "echo a"},
+		{Event: "PreToolUse", Matcher: "write_file", Type: "command", Command: "echo a", Timeout: 45},
 		{Event: "Stop", Type: "command", Command: "echo b"},
 	}}
 	renderApply(t, a, in, adapter.ScopeUser, "")
@@ -90,16 +90,19 @@ func TestRoundTrip_Hooks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	type hk struct{ e, m, t_, c string }
+	type hk struct {
+		e, m, t_, c string
+		timeout     int
+	}
 	norm := func(hs []source.Hook) []hk {
 		out := make([]hk, 0, len(hs))
 		for _, h := range hs {
-			out = append(out, hk{h.Event.Unverified(), h.Matcher, h.Type, h.Command})
+			out = append(out, hk{h.Event.Unverified(), h.Matcher, h.Type, h.Command, h.Timeout})
 		}
 		sort.Slice(out, func(i, j int) bool { return out[i].e < out[j].e })
 		return out
 	}
-	want := []hk{{"PreToolUse", "write_file", "command", "echo a"}, {"Stop", "", "command", "echo b"}}
+	want := []hk{{"PreToolUse", "write_file", "command", "echo a", 45}, {"Stop", "", "command", "echo b", 0}}
 	if g := norm(got.Hooks); !reflect.DeepEqual(g, want) {
 		t.Fatalf("hooks round-trip mismatch:\n got %+v\nwant %+v", g, want)
 	}

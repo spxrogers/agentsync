@@ -160,7 +160,7 @@ func TestApply_JSONC_CommentedSettings_NoClobber(t *testing.T) {
 // TestIngest_JSONC_CommentedSettings verifies ingest tolerates a commented
 // settings.json (instead of hard-failing the whole import) and that hook events
 // agentsync cannot fully represent — Gemini-only events, or handlers with
-// unmodeled fields like timeout — are left uncaptured with a warning, so a later
+// unmodeled fields like name — are left uncaptured with a warning, so a later
 // apply never owns an array it would lossily rewrite.
 func TestIngest_JSONC_CommentedSettings(t *testing.T) {
 	tmp := t.TempDir()
@@ -173,7 +173,7 @@ func TestIngest_JSONC_CommentedSettings(t *testing.T) {
   "mcpServers": { "gh": { "command": "npx", "timeout": 30000 } },
   "hooks": {
     "BeforeTool": [ { "matcher": "", "hooks": [ { "type": "command", "command": "ok.sh" } ] } ],
-    "AfterTool": [ { "matcher": "", "hooks": [ { "type": "command", "command": "slow.sh", "timeout": 5000 } ] } ],
+    "AfterTool": [ { "matcher": "", "hooks": [ { "type": "command", "command": "slow.sh", "name": "slow-hook" } ] } ],
     "BeforeModel": [ { "matcher": "", "hooks": [ { "type": "command", "command": "x.sh" } ] } ],
   },
 }`
@@ -194,7 +194,7 @@ func TestIngest_JSONC_CommentedSettings(t *testing.T) {
 	}
 	out := warn.String()
 	for _, wantMsg := range []string{
-		`unmodeled fields ("timeout")`,
+		`unmodeled fields ("name")`,
 		`"BeforeModel" has no canonical equivalent`,
 	} {
 		if !strings.Contains(out, wantMsg) {

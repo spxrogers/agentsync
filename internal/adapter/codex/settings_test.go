@@ -1,6 +1,7 @@
 package codex_test
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -131,5 +132,85 @@ func TestMergeTOML_EmptyExisting(t *testing.T) {
 	servers := got["mcp_servers"].(map[string]any)
 	if servers["github"] == nil {
 		t.Fatalf("github server missing: %v", got)
+	}
+}
+
+// TestMergeTOML_PreservesNumericTypesFromJSONNumbers guards against the
+// BLOCKER 1 bug where go-toml rendered json.Number as a string, corrupting
+// hook timeouts and MCP extras into values Codex rejects.
+func TestMergeTOML_PreservesNumericTypesFromJSONNumbers(t *testing.T) {
+	ours := map[string]any{
+		"mcp_servers": map[string]any{
+			"github": map[string]any{
+				"command":             "npx",
+				"startup_timeout_sec": json.Number("10"),
+			},
+		},
+		"hooks": map[string]any{
+			"PreToolUse": []any{
+				map[string]any{
+					"matcher": "Bash",
+					"hooks": []any{
+						map[string]any{
+							"type":    "command",
+							"command": "echo hi",
+							"timeout": json.Number("30"),
+						},
+					},
+				},
+			},
+		},
+	}
+	out, err := codex.MergeTOML(nil, ours, nil)
+	if err != nil {
+		t.Fatalf("MergeTOML: %v", err)
+	}
+	outStr := string(out)
+	if strings.Contains(outStr, "'30'") || strings.Contains(outStr, `"30"`) {
+		t.Fatalf("timeout was rendered as string in TOML: %s", outStr)
+	}
+	if strings.Contains(outStr, "'10'") || strings.Contains(outStr, `"10"`) {
+		t.Fatalf("startup_timeout_sec was rendered as string in TOML: %s", outStr)
+	}
+	// Verify it unmarshals with integer values:
+	var parsed map[string]any
+	if err := toml.Unmarshal(out, &parsed); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	// Stepwise rather than a bare assertion chain, which panics on a shape
+	// change instead of naming the step that broke.
+	servers, ok := parsed["mcp_servers"].(map[string]any)
+	if !ok {
+		t.Fatalf("mcp_servers is %T, want a table\n%s", parsed["mcp_servers"], out)
+	}
+	mcp, ok := servers["github"].(map[string]any)
+	if !ok {
+		t.Fatalf("mcp_servers.github is %T, want a table\n%s", servers["github"], out)
+	}
+	if mcp["startup_timeout_sec"] != int64(10) {
+		t.Fatalf("startup_timeout_sec type mismatch: %#v (%T)", mcp["startup_timeout_sec"], mcp["startup_timeout_sec"])
+	}
+	hooks, ok := parsed["hooks"].(map[string]any)
+	if !ok {
+		t.Fatalf("hooks is %T, want a table\n%s", parsed["hooks"], out)
+	}
+	defs, ok := hooks["PreToolUse"].([]any)
+	if !ok || len(defs) == 0 {
+		t.Fatalf("hooks.PreToolUse is %T (len 0?), want a non-empty array of tables\n%s", hooks["PreToolUse"], out)
+	}
+	hooksTable, ok := defs[0].(map[string]any)
+	if !ok {
+		t.Fatalf("hooks.PreToolUse[0] is %T, want a table\n%s", defs[0], out)
+	}
+	handlers, ok := hooksTable["hooks"].([]any)
+	if !ok || len(handlers) == 0 {
+		t.Fatalf("hooks.PreToolUse[0].hooks is %T (len 0?), want a non-empty array\n%s", hooksTable["hooks"], out)
+	}
+	handler, ok := handlers[0].(map[string]any)
+	if !ok {
+		t.Fatalf("hooks.PreToolUse[0].hooks[0] is %T, want a table\n%s", handlers[0], out)
+	}
+	if handler["timeout"] != int64(30) {
+		t.Fatalf("hook timeout type mismatch: %#v (%T)", handler["timeout"], handler["timeout"])
 	}
 }

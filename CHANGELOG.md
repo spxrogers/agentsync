@@ -11,6 +11,19 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Added
 
+- **Hook handlers can now carry a `timeout`.** Add `timeout = 30` to an entry in
+  `hooks/<event>.toml` and the handler is allowed 30 seconds across Claude Code,
+  Codex CLI, Cursor, Gemini CLI and Grok Build. Before this, `timeout` was a
+  field agentsync could not represent, so a hook you had given one natively was
+  refused by `import` and could not be brought under management at all.
+  The canonical unit is always **whole seconds** — **Gemini CLI's native field
+  counts milliseconds**, and its adapter converts in both directions so you
+  still write seconds once. A native value agentsync cannot carry (negative,
+  fractional, or an explicit `0`, which is indistinguishable from "no timeout")
+  leaves the event uncaptured with a warning instead of being rounded or
+  silently dropped, and a bad `timeout` in your own canonical source now fails
+  the load with a message naming the file rather than disappearing at render.
+  Plugin-provided hooks carry their timeout through projection too.
 - **Dedicated Grok Build adapter** (`agentsync agent add grok`) with user/project
   instructions, complete skill directories, legacy Markdown commands, TOML MCP,
   and JSON command hooks. Includes detection, `GROK_HOME`, import/reconcile,
@@ -50,6 +63,13 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Fixed
 
+- **Numbers in Codex's `config.toml` no longer render as strings.** `MergeTOML`
+  passed `json.Number` values through to the TOML encoder, which marshaled them
+  as quoted strings — so an MCP server's `startup_timeout_sec = 10` came back as
+  `startup_timeout_sec = '10'` after an `apply`, and Codex read a string where
+  it wanted an integer. Numbers now keep their type through the merge. This also
+  covers any other numeric key a native `config.toml` carries through the
+  unmodeled-field passthrough.
 - **`AGENTSYNC_TARGET_ROOT` is a real sandbox, and the test suite is hermetic
   against a configured shell**
   ([#270](https://github.com/spxrogers/agentsync/issues/270)). While the
