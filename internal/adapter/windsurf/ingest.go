@@ -2,7 +2,6 @@ package windsurf
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 
 	"github.com/spxrogers/agentsync/internal/adapter"
@@ -63,11 +62,12 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 					continue
 				}
 				name := e.Name()[:len(e.Name())-len(".md")]
-				data, err := os.ReadFile(filepath.Join(p.WorkflowsDir, e.Name()))
+				data, fileOK, err := adapter.ReadFileOptional(filepath.Join(p.WorkflowsDir, e.Name()))
 				if err != nil {
-					if !os.IsNotExist(err) {
-						fmt.Fprintf(a.stderr(), "warning: skipping workflow %q: read: %v\n", name, err)
-					}
+					fmt.Fprintf(a.stderr(), "warning: skipping workflow %q: read: %v\n", name, err)
+					continue
+				}
+				if !fileOK {
 					continue
 				}
 				// Windsurf workflows are plain markdown with no honored frontmatter,

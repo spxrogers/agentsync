@@ -54,13 +54,15 @@ func pathlessErr(err error) error {
 // readDestFile.
 //
 // Every destination read in THIS PACKAGE routes here, cli.hashFile included, so
-// they cannot disagree about what is safe to read. Other packages are not
-// covered: `apply`, `apply --dry-run`, `reconcile --auto-override` and
-// `import <agent>` still hang, and `doctor` is exposed through its plugin
-// check, because those reads live in internal/render and the adapter Ingest
-// paths (#241, #242). `doctor` is not merely exposed there: with a FIFO at
-// ~/.claude/settings.json it hangs outright (measured, rc=124, wedged after
-// printing "Plugins"), through claude.IngestPlugins.
+// they cannot disagree about what is safe to read. The write and ingest sides
+// live in other packages and are guarded by their own equivalents rather than
+// by this gate: render.Writer.Write shape-checks before its convergence read,
+// and every adapter Ingest reads through adapter.ReadFileOptional /
+// ReadDirOptional. That closed the remaining hangs in `apply`,
+// `apply --dry-run`, `reconcile --auto-override`, `import <agent>` and
+// `doctor` (which reaches a destination through claude.IngestPlugins) — #241
+// and #242. All of them are covered end-to-end by
+// TestCommandsDoNotHangOnNonRegularDestination.
 //
 // Three things to know about the shape check:
 //
@@ -121,7 +123,7 @@ const (
 // so that, once a user has opted in, a link that still cannot be read is
 // reported as broken rather than as "set the switch".
 //
-// It mirrors iox.resolveSymlinkDest, the write side, through the shared
+// It mirrors iox.ResolveSymlinkDest, the write side, through the shared
 // iox.SymlinkDestAllowed, so the read side and apply cannot disagree about
 // whether a symlinked destination is supported. The mirror is a POLICY one, not
 // a literal prediction: apply only errors when the CONTENT differs (its

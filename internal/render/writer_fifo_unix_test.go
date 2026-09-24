@@ -59,6 +59,38 @@ func TestOrphanDeleteWillProceed_FIFO(t *testing.T) {
 	})
 }
 
+// TestWriterWrite_FIFODoesNotBlock covers the WRITE half: Writer.Write's
+// convergence read is the one `apply` makes on every run, and an unguarded
+// os.ReadFile there does not fail on a FIFO — it blocks in open(2) forever,
+// wedging the whole command (#241).
+//
+// The FIFO must also survive: agentsync cannot read it, so it cannot rule out
+// content worth preserving, so it must not replace it either.
+func TestWriterWrite_FIFODoesNotBlock(t *testing.T) {
+	tmp := t.TempDir()
+	home := filepath.Join(tmp, ".agentsync")
+	if err := os.MkdirAll(home, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fifo := filepath.Join(tmp, "pipe.md")
+	mkfifo(t, fifo)
+	w := render.NewWriter(state.New(), home, tmp, adapter.ScopeUser, "", "claude")
+	op := adapter.FileOp{Action: adapter.ActionWrite, Path: fifo, Content: []byte("x"), Mode: 0o644}
+	withinTimeout(t, "Writer.Write FIFO", func() {
+		err := w.Write(op, []byte("x"))
+		if err == nil {
+			t.Error("write through a FIFO must error, not succeed")
+		}
+	})
+	fi, err := os.Lstat(fifo)
+	if err != nil {
+		t.Fatalf("the FIFO must survive a refused write: %v", err)
+	}
+	if fi.Mode()&os.ModeNamedPipe == 0 {
+		t.Fatalf("the FIFO was replaced by a %v; a refused write must leave the destination alone", fi.Mode())
+	}
+}
+
 // TestWriterDelete_FIFODoesNotBlock covers the guard that matters MOST, and the
 // one a summary predicate cannot stand in for: OrphanDeleteWillProceed only
 // decides a COUNT, while Writer.Delete is the call a real `apply` makes. Its

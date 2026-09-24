@@ -101,8 +101,9 @@ can resolve secrets into native config files. Areas of particular interest:
   diagnostics surface — native marketplace ids and source types) stay plain
   strings.
 - **Destination writes**: writes are atomic and refuse to clobber symlinked
-  destinations by default (one known gap: `Writer.Write`'s convergence chmod
-  still follows a link, #248) — and, since #229, every read-side surface
+  destinations by default — including `Writer.Write`'s convergence chmod, which
+  used to follow a link and now resolves it through the same
+  `iox.ResolveSymlinkDest` policy (#248) — and, since #229, every read-side surface
   (`status`, `diff`, `reconcile`, `explain`) refuses to read through a
   symlinked whole-file destination under the same switch,
   `AGENTSYNC_ALLOW_SYMLINK_DEST`, reporting it as drift instead; pre-existing

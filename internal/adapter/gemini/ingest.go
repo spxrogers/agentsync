@@ -100,9 +100,12 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 				return err
 			}
 			name := filepath.ToSlash(strings.TrimSuffix(rel, ".toml"))
-			data, err := os.ReadFile(path)
+			data, fileOK, err := adapter.ReadFileOptional(path)
 			if err != nil {
 				fmt.Fprintf(warn, "warning: skipping command %q: %v\n", name, err)
+				return nil
+			}
+			if !fileOK {
 				return nil
 			}
 			var cf geminiCommandFile
@@ -133,11 +136,12 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 				continue
 			}
 			name := e.Name()[:len(e.Name())-len(".md")]
-			data, err := os.ReadFile(filepath.Join(p.AgentsDir, e.Name()))
+			data, fileOK, err := adapter.ReadFileOptional(filepath.Join(p.AgentsDir, e.Name()))
 			if err != nil {
-				if !os.IsNotExist(err) {
-					fmt.Fprintf(warn, "warning: skipping subagent %q: read: %v\n", name, err)
-				}
+				fmt.Fprintf(warn, "warning: skipping subagent %q: read: %v\n", name, err)
+				continue
+			}
+			if !fileOK {
 				continue
 			}
 			fm, body, lenient, err := claude.ParseFrontmatterWithReport(data)

@@ -29,7 +29,7 @@ func applyOnce(t *testing.T, reg *adapter.Registry, agents []string, c source.Ca
 		t.Fatalf("Apply: %v", err)
 	}
 	for name, res := range plan.PerAgent {
-		render.PruneStaleState(st, userHome, name, adapter.ScopeUser, "", res.Ops)
+		render.PruneStaleState(st, userHome, name, adapter.ScopeUser, "", res.Ops, render.SharedDests{})
 	}
 	for name, res := range plan.PerAgent {
 		if err := render.RecordOpsState(st, userHome, name, adapter.ScopeUser, "", res.Ops); err != nil {

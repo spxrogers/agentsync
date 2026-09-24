@@ -2,7 +2,6 @@ package generic
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 
 	"github.com/spf13/afero"
@@ -101,8 +100,8 @@ func (a *Adapter) ingestSkills(skillsDir string) ([]source.Skill, error) {
 			continue
 		}
 		skillDir := filepath.Join(skillsDir, e.Name())
-		data, err := os.ReadFile(filepath.Join(skillDir, "SKILL.md"))
-		if err != nil {
+		data, fileOK, err := adapter.ReadFileOptional(filepath.Join(skillDir, "SKILL.md"))
+		if err != nil || !fileOK {
 			continue
 		}
 		fm, body, _, err := claude.ParseFrontmatterWithReport(data)

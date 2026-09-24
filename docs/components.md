@@ -519,11 +519,15 @@ symmetric with the dest→source write boundary (see architecture §7).
   bare `os.ReadFile(op.Path)` anywhere under `internal/cli` — a two-spelling
   text matcher, so it catches the copy-paste that happened rather than every
   possible spelling.
-  It is **not** yet true of this package's own `Writer.Write` convergence read
-  or of the adapter `Ingest` paths, so `apply`, `apply --dry-run`,
-  `reconcile --auto-override` (which re-applies through `Writer.Write`),
-  `import <agent>` and `doctor` (through its plugin check) still block on a
-  non-regular destination — issues #241 and #242.
+  It is now also true of this package's own `Writer.Write` convergence read
+  (which shape-checks before `ReadFile`) and of the adapter `Ingest` paths
+  (which read through `adapter.ReadFileOptional` / `ReadDirOptional`), so
+  `apply`, `apply --dry-run`, `reconcile --auto-override` (which re-applies
+  through `Writer.Write`), `import <agent>` and `doctor` (through its plugin
+  check) all RETURN on a non-regular destination instead of blocking in
+  `open(2)` — issues #241 and #242.
+  `TestCommandsDoNotHangOnNonRegularDestination` (`internal/cli`) drives every
+  one of those commands against a real FIFO destination under a time bound.
 - **Depends on:** adapter, secrets, source, state, paths, iox.
 - **Files:** `pipeline.go`, `writer.go`, `state_apply.go`, `report.go`.
 

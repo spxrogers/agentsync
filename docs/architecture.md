@@ -1079,8 +1079,10 @@ destination (`drift`, or `conflict`/`foreign-collision` by its usual table);
 `diff` prints a `symlink` hunk naming the switch rather than reading through and
 reporting no difference; `reconcile` shows the SHA display instead of a text
 diff, and its `[w]`rite-back refuses to capture through the link with advice
-that omits `[o]verride` (#248: `Writer.Write`'s mode arm chmods through a link
-before the policy is consulted). Set, all four resolve the link and compare the
+that omits `[o]verride` (that omission now reflects a clean REFUSAL rather than
+a hazard: `Writer.Write`'s mode arm used to chmod through the link before the
+policy was consulted, and since #248 it resolves through
+`iox.ResolveSymlinkDest` like every other write). Set, all four resolve the link and compare the
 file it points at, so a converged chezmoi setup reports `clean`; a link that
 does not resolve answers a second sentinel so the advice is "fix the link", not
 "set the switch". A link to a FIFO, device or directory is a shape problem the

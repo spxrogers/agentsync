@@ -4,12 +4,14 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/spxrogers/agentsync/internal/adapter"
+	"github.com/spxrogers/agentsync/internal/iox"
 	"github.com/spxrogers/agentsync/internal/render"
 	"github.com/spxrogers/agentsync/internal/state"
 	"github.com/spxrogers/agentsync/internal/testenv"
@@ -62,6 +64,75 @@ func TestWrite_ChmodReconverges(t *testing.T) {
 	}
 	if !w2.Wrote()[dest] {
 		t.Fatalf("a content-identical mode change must be reported as written")
+	}
+}
+
+func TestWrite_ChmodRefusesSymlinkDest(t *testing.T) {
+	testenv.RequireContainer(t)
+	home := t.TempDir()
+	dir := t.TempDir()
+	target := filepath.Join(dir, "run.sh")
+	content := []byte("#!/bin/sh\necho hi\n")
+	if err := os.WriteFile(target, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "link.sh")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	op := adapter.FileOp{Action: adapter.ActionWrite, Path: link, Content: content, Mode: 0o755}
+	w := render.NewWriter(state.New(), home, home, adapter.ScopeUser, "", "claude")
+	err := w.Write(op, content)
+	if err == nil {
+		t.Fatal("chmod through a symlink dest must refuse when AGENTSYNC_ALLOW_SYMLINK_DEST is unset")
+	}
+	// Match the SENTINEL, not merely "some error": any other failure (a typo in
+	// the fixture, a missing parent) would satisfy a bare non-nil check while
+	// proving nothing about the symlink policy.
+	if !errors.Is(err, iox.ErrSymlinkDest) {
+		t.Fatalf("refusal must be iox.ErrSymlinkDest so callers can match it; got %v", err)
+	}
+	fi, serr := os.Stat(target)
+	if serr != nil {
+		t.Fatalf("stat target: %v", serr)
+	}
+	if fi.Mode().Perm() != 0o644 {
+		t.Fatalf("target mode mutated through the link: %v", fi.Mode().Perm())
+	}
+}
+
+// TestWrite_ChmodFollowsSymlinkWhenOptedIn is the positive half: with
+// AGENTSYNC_ALLOW_SYMLINK_DEST=1 the convergence chmod must actually reach the
+// link's target. Without this row, refusing the chmod unconditionally — which
+// would break every opted-in chezmoi user — passes the whole suite.
+func TestWrite_ChmodFollowsSymlinkWhenOptedIn(t *testing.T) {
+	testenv.RequireContainer(t)
+	t.Setenv("AGENTSYNC_ALLOW_SYMLINK_DEST", "1")
+	home := t.TempDir()
+	dir := t.TempDir()
+	target := filepath.Join(dir, "run.sh")
+	content := []byte("#!/bin/sh\necho hi\n")
+	if err := os.WriteFile(target, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "link.sh")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	op := adapter.FileOp{Action: adapter.ActionWrite, Path: link, Content: content, Mode: 0o755}
+	w := render.NewWriter(state.New(), home, home, adapter.ScopeUser, "", "claude")
+	if err := w.Write(op, content); err != nil {
+		t.Fatalf("opted in, a content-identical mode change must succeed: %v", err)
+	}
+	fi, err := os.Stat(target)
+	if err != nil {
+		t.Fatalf("stat target: %v", err)
+	}
+	if fi.Mode().Perm() != 0o755 {
+		t.Fatalf("opted in, the chmod must reach the link's target: got %v, want 0755", fi.Mode().Perm())
+	}
+	if lfi, err := os.Lstat(link); err != nil || lfi.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("the link itself must survive as a link: %v %v", lfi, err)
 	}
 }
 

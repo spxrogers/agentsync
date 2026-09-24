@@ -50,6 +50,40 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Fixed
 
+- **`apply` no longer deletes a destination another enabled agent still
+  writes** ([#246](https://github.com/spxrogers/agentsync/issues/246)). Orphan
+  cleanup was computed per agent with no knowledge of its siblings, so with
+  Codex, Factory and agy all rendering `.agents/skills`, dropping one of them
+  could delete a skill the others still produce — delete-then-rewrite or
+  delete-then-fail, depending purely on registry order. Apply now keeps any
+  path the whole plan still renders, the agent that stopped rendering it
+  releases its state entry instead of holding it forever, and `status` / `diff`
+  stop offering a deletion that will never happen (so `status --exit-code`
+  returns 0 after a clean apply, which it previously never did once a shared
+  dest was involved).
+- **A FIFO, device or directory at a destination no longer hangs `apply`,
+  `apply --dry-run`, `reconcile --auto-override`, `import <agent>` or `doctor`**
+  ([#241](https://github.com/spxrogers/agentsync/issues/241),
+  [#242](https://github.com/spxrogers/agentsync/issues/242)). `os.ReadFile` on a
+  FIFO does not fail, it blocks in `open(2)` forever. `render.Writer.Write` now
+  shape-checks before reading, and every adapter `Ingest` reads through
+  `adapter.ReadFileOptional` / `ReadDirOptional`, so these commands report the
+  shape and return instead of wedging. This completes the read-side sweep that
+  landed for `status` / `diff` / `explain` / `reconcile` earlier in this
+  release.
+- **`apply` no longer changes the mode of a symlinked destination's target**
+  ([#248](https://github.com/spxrogers/agentsync/issues/248)). When the content
+  already matched, the convergence path called `os.Chmod` on the destination —
+  which follows symlinks — even with `AGENTSYNC_ALLOW_SYMLINK_DEST` unset,
+  reaching through a link agentsync had otherwise refused to write. It now
+  resolves through `iox.ResolveSymlinkDest` like every other write.
+- **An unreadable JSON merge target is no longer silently replaced.** Cline,
+  Cursor, Roo, Windsurf and Claude read their merge target through a helper
+  that returned an empty map on ANY error, so a `settings.json` that existed
+  but could not be read (a permission problem, a transient I/O error) was
+  treated as empty and atomically rewritten with agentsync's keys alone,
+  destroying the user's own configuration. A read error is now surfaced; only a
+  genuine parse failure still degrades to empty.
 - **`AGENTSYNC_TARGET_ROOT` is a real sandbox, and the test suite is hermetic
   against a configured shell**
   ([#270](https://github.com/spxrogers/agentsync/issues/270)). While the
@@ -238,15 +272,10 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   later.
 
   **`apply`, `apply --dry-run`, `reconcile`'s `[o]verride`, `import <agent>` and
-  `doctor` are NOT fixed by this** and still hang on the same fixture — their reads are
-  in `internal/render` and the adapter `Ingest` paths, a far wider sweep.
-  `[o]verride` re-applies through `render.Writer.Write`, so it shares `apply`'s
-  unguarded read; the refusal message therefore points at removing or replacing
-  the file rather than at `[o]`, which would wedge. `doctor` reads no
-  destination itself but reaches one through its plugin check — a FIFO at
-  `~/.claude/settings.json` wedges it after it prints `Plugins`. Tracked as
-  [#241](https://github.com/spxrogers/agentsync/issues/241) and
-  [#242](https://github.com/spxrogers/agentsync/issues/242).
+  `doctor` were NOT fixed by that first pass** — their reads live in
+  `internal/render` and the adapter `Ingest` paths, a far wider sweep. That
+  sweep has since landed: see the `#241` / `#242` entries under
+  `[Unreleased]` above.
 
 - **`agentsync check` no longer rejects a `[secrets].backend` that `apply`
   accepts.** `secrets.SelectBackend` — the function `apply` actually resolves

@@ -2,7 +2,6 @@ package cline
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 
 	"github.com/spxrogers/agentsync/internal/adapter"
@@ -70,12 +69,12 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 					continue
 				}
 				wfPath := filepath.Join(p.WorkflowsDir, e.Name())
-				data, err := os.ReadFile(wfPath)
+				data, fileOK, err := adapter.ReadFileOptional(wfPath)
 				if err != nil {
-					if os.IsNotExist(err) {
-						continue
-					}
 					return c, fmt.Errorf("read workflow %s: %w", wfPath, err)
+				}
+				if !fileOK {
+					continue
 				}
 				body, owned := stripManagedWorkflow(string(data))
 				if !owned {

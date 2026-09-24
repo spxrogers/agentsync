@@ -99,30 +99,25 @@ func TestCommandsDoNotHangOnNonRegularDestination(t *testing.T) {
 			}
 			t.Cleanup(func() { restoreDest(t, dest.path, applied, info.Mode().Perm()) })
 
-			// The first group is what this change fixes. The second still hangs
-			// on this exact fixture and is SKIPPED rather than asserted or
-			// omitted: asserting the hang costs 8s a row and would start
-			// failing the day it is fixed, reading as a regression; omitting it
-			// leaves nothing to find. A skip is greppable, shows up in -v, and
-			// the person who closes the issue deletes one line to inherit a
-			// ready-made assertion.
-			for _, tc := range []struct {
-				args []string
-				skip string
-			}{
-				{args: []string{"status"}},
-				{args: []string{"diff"}},
-				{args: []string{"reconcile", "--auto-safe"}},
-				{args: []string{"apply", "--dry-run"}, skip: "#241: render.Writer.Write's convergence read is unguarded"},
-				{args: []string{"apply"}, skip: "#241: render.Writer.Write's convergence read is unguarded"},
-				{args: []string{"reconcile", "--auto-override"}, skip: "#241: [o]verride queues into render.Writer.Write"},
-				{args: []string{"import", "claude"}, skip: "#242: the adapter Ingest reads are unguarded"},
+			// Every surface that touches a destination now returns on this
+			// fixture, so there is no longer a skipped second group. The
+			// write-side rows go through Writer.Write's shape gate, the
+			// read-side ones through readDestBytes, and the ingest rows
+			// through adapter.ReadFileOptional. `reconcile --auto-override`
+			// re-applies through Writer.Write and so is covered by the same
+			// gate that covers `apply`; `doctor` reaches a destination through
+			// its plugin check.
+			for _, args := range [][]string{
+				{"status"},
+				{"diff"},
+				{"reconcile", "--auto-safe"},
+				{"reconcile", "--auto-override"},
+				{"apply", "--dry-run"},
+				{"apply"},
+				{"import", "claude"},
+				{"doctor"},
 			} {
-				args := tc.args
 				t.Run(strings.Join(args, " "), func(t *testing.T) {
-					if tc.skip != "" {
-						t.Skip(tc.skip)
-					}
 					// Exit status is deliberately not asserted: a non-regular
 					// destination may legitimately report drift, or refuse. The
 					// contract under test is that the command RETURNS.

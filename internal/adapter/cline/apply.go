@@ -3,7 +3,6 @@ package cline
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 
 	"github.com/spxrogers/agentsync/internal/adapter"
 	"github.com/spxrogers/agentsync/internal/jsonkeys"
@@ -24,7 +23,10 @@ func (a *Adapter) applyWrite(op adapter.FileOp, w adapter.DestWriter) error {
 	if op.MergeStrategy != "merge-json-keys" {
 		return w.Write(op, op.Content)
 	}
-	existing := readJSONFile(op.Path)
+	existing, err := readJSONFile(op.Path)
+	if err != nil {
+		return fmt.Errorf("read %s: %w", op.Path, err)
+	}
 	ours, err := jsonkeys.DecodeObject(op.Content)
 	if err != nil {
 		return fmt.Errorf("parse our payload for %s: %w", op.Path, err)
@@ -37,17 +39,28 @@ func (a *Adapter) applyWrite(op adapter.FileOp, w adapter.DestWriter) error {
 	return w.Write(op, append(body, '\n'))
 }
 
-// readJSONFile reads and decodes a JSON object file, returning an empty map on
-// any read/parse error. Decode preserves json.Number so a foreign integer > 2^53
-// isn't rounded when the merged file is re-marshalled.
-func readJSONFile(path string) map[string]any {
-	data, err := os.ReadFile(path)
+// readJSONFile reads and decodes a JSON object file.
+//
+// A READ error is returned, not swallowed. It used to degrade to an empty map
+// like a parse error does, which meant a merge target that existed but could
+// not be read (permissions, transient I/O) was treated as absent and then
+// atomically rewritten with agentsync's keys alone — silently destroying the
+// user's own config. Only a genuine PARSE failure still degrades to empty, on
+// the theory that a file we cannot understand is one we may as well re-author.
+//
+// Decode preserves json.Number so a foreign integer > 2^53 is not rounded when
+// the merged file is re-marshalled.
+func readJSONFile(path string) (map[string]any, error) {
+	data, err := adapter.ReadExisting(path)
 	if err != nil {
-		return map[string]any{}
+		return nil, err
+	}
+	if len(data) == 0 {
+		return map[string]any{}, nil
 	}
 	m, err := jsonkeys.DecodeObject(data)
 	if err != nil {
-		return map[string]any{}
+		return map[string]any{}, nil
 	}
-	return m
+	return m, nil
 }

@@ -286,8 +286,14 @@ func runApplyPipeline(cmd *cobra.Command, home string, o applyOpts) error {
 	// produces. Without this, a removed MCP server / skill / hook
 	// shows up as `Orphan` in `status` forever and targets.json
 	// grows unbounded.
+	//
+	// The shared-dest set is the same one applyPlan used to decide which
+	// orphan deletes to skip (#246): an agent that stopped rendering a path a
+	// sibling still writes releases its entry here, because the delete that
+	// would otherwise retire it is never going to run.
+	sharedDests := render.NewSharedDests(plan, userHome)
 	for name, res := range plan.PerAgent {
-		render.PruneStaleState(s, userHome, name, sc, projectRoot, res.Ops)
+		render.PruneStaleState(s, userHome, name, sc, projectRoot, res.Ops, sharedDests)
 	}
 	// Update state with post-apply hashes.
 	for name, res := range plan.PerAgent {
@@ -443,8 +449,9 @@ func planSyncCounts(plan render.RenderPlan, wouldChange map[string]bool) (toWrit
 func removalCounts(plan render.RenderPlan, s *state.Targets, userHome string, sc adapter.Scope, projectRoot string) (removedKeys, removedFiles, appliedOps int) {
 	appliedOps = plan.Total()
 	fileDeletes := map[string]bool{}
+	shared := render.NewSharedDests(plan, userHome)
 	for name, res := range plan.PerAgent {
-		for _, del := range render.OrphanDeletes(s, userHome, name, sc, projectRoot, res.Ops) {
+		for _, del := range shared.FilterDeletes(render.OrphanDeletes(s, userHome, name, sc, projectRoot, res.Ops)) {
 			// Count only what apply will actually remove. An orphan whose
 			// destination cannot be read is SKIPPED with a warning, and its state
 			// entry is kept so the next run retries — so counting it here would
@@ -503,6 +510,13 @@ func baselinePaths(plan render.RenderPlan, s *state.Targets, userHome string, sc
 		for _, op := range res.Ops {
 			out[op.Path] = true
 		}
+		// Deliberately UNfiltered by SharedDests, unlike removalCounts. A
+		// delete the shared-dest rule keeps is kept precisely because some
+		// agent in this plan still writes that path — so the loop above
+		// already added it. Filtering here would be a no-op that reads like a
+		// safety check, and baselining one extra path is harmless anyway:
+		// over-baselining costs nothing, under-baselining loses the pre-apply
+		// copy of a file apply is about to remove.
 		for _, del := range render.OrphanDeletes(s, userHome, name, sc, projectRoot, res.Ops) {
 			out[del.Path] = true
 		}

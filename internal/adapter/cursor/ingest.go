@@ -2,7 +2,6 @@ package cursor
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 
 	"github.com/spf13/afero"
@@ -61,11 +60,12 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 				continue
 			}
 			skillDir := filepath.Join(p.SkillsDir, e.Name())
-			data, err := os.ReadFile(filepath.Join(skillDir, "SKILL.md"))
+			data, fileOK, err := adapter.ReadFileOptional(filepath.Join(skillDir, "SKILL.md"))
 			if err != nil {
-				if !os.IsNotExist(err) {
-					fmt.Fprintf(warn, "warning: skipping skill %q: read SKILL.md: %v\n", e.Name(), err)
-				}
+				fmt.Fprintf(warn, "warning: skipping skill %q: read SKILL.md: %v\n", e.Name(), err)
+				continue
+			}
+			if !fileOK {
 				continue
 			}
 			fm, body, lenient, err := claude.ParseFrontmatterWithReport(data)
@@ -96,11 +96,12 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 				continue
 			}
 			name := e.Name()[:len(e.Name())-len(".md")]
-			data, err := os.ReadFile(filepath.Join(p.AgentsDir, e.Name()))
+			data, fileOK, err := adapter.ReadFileOptional(filepath.Join(p.AgentsDir, e.Name()))
 			if err != nil {
-				if !os.IsNotExist(err) {
-					fmt.Fprintf(warn, "warning: skipping subagent %q: read: %v\n", name, err)
-				}
+				fmt.Fprintf(warn, "warning: skipping subagent %q: read: %v\n", name, err)
+				continue
+			}
+			if !fileOK {
 				continue
 			}
 			fm, body, lenient, err := claude.ParseFrontmatterWithReport(data)
@@ -129,11 +130,12 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 				continue
 			}
 			name := e.Name()[:len(e.Name())-len(".md")]
-			data, err := os.ReadFile(filepath.Join(p.CommandsDir, e.Name()))
+			data, fileOK, err := adapter.ReadFileOptional(filepath.Join(p.CommandsDir, e.Name()))
 			if err != nil {
-				if !os.IsNotExist(err) {
-					fmt.Fprintf(warn, "warning: skipping command %q: read: %v\n", name, err)
-				}
+				fmt.Fprintf(warn, "warning: skipping command %q: read: %v\n", name, err)
+				continue
+			}
+			if !fileOK {
 				continue
 			}
 			fm, body, lenient, err := claude.ParseFrontmatterWithReport(data)
