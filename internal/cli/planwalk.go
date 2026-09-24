@@ -209,6 +209,10 @@ func walkPlanItems(w planWalk) []planItem {
 		readDest = readDestFile
 	}
 	var out []planItem
+	// The same shared-dest rule apply uses (#246): a path another enabled
+	// agent still renders is not an orphan, so status/diff must not offer a
+	// deletion apply will never perform.
+	sharedDests := render.NewSharedDests(w.plan, w.userHome)
 	for _, name := range w.agents {
 		res, ok := w.plan.PerAgent[name]
 		if !ok {
@@ -273,7 +277,7 @@ func walkPlanItems(w planWalk) []planItem {
 		if !w.includeOrphans {
 			continue
 		}
-		for _, orphan := range render.OrphanFiles(w.state, w.userHome, name, w.scope, w.projectRoot, res.Ops) {
+		for _, orphan := range render.OrphanFiles(w.state, w.userHome, name, w.scope, w.projectRoot, res.Ops, sharedDests) {
 			entry := w.state.Files[stateFileKey(w.userHome, name, w.scope, w.projectRoot, orphan)]
 			perm, reg := destModePerm(orphan)
 			it := planItem{

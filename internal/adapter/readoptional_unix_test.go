@@ -11,9 +11,16 @@ import (
 	"time"
 
 	"github.com/spxrogers/agentsync/internal/adapter"
+	"github.com/spxrogers/agentsync/internal/testenv"
 )
 
 func TestReadFileOptional_FIFODoesNotBlock(t *testing.T) {
+	// This touches the filesystem, so it is container-gated like its siblings.
+	// It stayed off the host only because its NAME happens to match the
+	// `-skip 'TestReadFileOptional'` in the justfile's test-fast recipe —
+	// an accident, not a guard: renaming the test would have silently let it
+	// run against a developer's real home.
+	testenv.RequireContainer(t)
 	fifo := filepath.Join(t.TempDir(), "pipe")
 	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
 		t.Skipf("mkfifo unsupported here: %v", err)

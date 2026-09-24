@@ -2,7 +2,6 @@ package codex
 
 import (
 	"fmt"
-	"os"
 	"sort"
 	"strings"
 
@@ -35,12 +34,12 @@ func (a *Adapter) IngestPlugins(scope adapter.Scope, project string) ([]adapter.
 		return nil, nil, err
 	}
 	p := ResolvePaths(a.opts.TargetRoot, project, scope == adapter.ScopeProject)
-	data, err := os.ReadFile(p.Config)
+	data, fileOK, err := adapter.ReadFileOptional(p.Config)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil, nil
-		}
 		return nil, nil, fmt.Errorf("read %s: %w", p.Config, err)
+	}
+	if !fileOK {
+		return nil, nil, nil
 	}
 	var top map[string]any
 	if toml.Unmarshal(data, &top) != nil {

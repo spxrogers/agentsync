@@ -1468,13 +1468,15 @@ func (s *reconcileSession) writeBackKeyItem(it reconcileItem) error {
 // mid-prompt with a keystroke to choose, and "not a regular file" alone does
 // not say which one gets them unstuck.
 //
-// The next step deliberately omits [o]verride for a NON-REGULAR destination.
-// Override re-applies through render.Writer.Write, whose convergence read is
-// not shape-guarded, so on that exact item it does not fail — it HANGS
-// (measured: `reconcile --auto-override` rc=124, #241). An earlier version of
-// the whole-file message recommended it, which walked the user out of a clean
-// refusal and into an unbounded wedge; restore the suggestion only once #241
-// is fixed. Every other read failure keeps the peers' remedy set: the common
+// The next step still omits [o]verride for a NON-REGULAR destination, but the
+// REASON has changed and the wording should not be read as the old one.
+// Override re-applies through render.Writer.Write, which used to hang on that
+// exact item because its convergence read was not shape-guarded (measured:
+// `reconcile --auto-override` rc=124, #241). It is guarded now and REFUSES
+// instead, so recommending [o] would no longer wedge — it would simply hand
+// the user a second refusal for the same reason they already got one.
+// "Remove or replace the file" remains the only step that actually unsticks
+// them. Every other read failure keeps the peers' remedy set: the common
 // one is an ABSENT destination — the user deleted a managed file, which is
 // itself drift — and there [o]verride is both safe and usually the fix, since
 // Writer.Write's convergence read gets ENOENT and falls straight through to

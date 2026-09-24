@@ -59,9 +59,17 @@ func (a *Adapter) applyWrite(op adapter.FileOp, w adapter.DestWriter) error {
 	return w.Write(op, append(body, '\n'))
 }
 
-// readJSONFile reads and decodes a JSON object file, returning an empty map on
-// any read/parse error. Decode preserves json.Number so a foreign integer > 2^53
-// isn't rounded when the merged file is re-marshalled.
+// readJSONFile reads and decodes a JSON object file.
+//
+// A READ error is returned, not swallowed. It used to degrade to an empty map
+// like a parse error does, which meant a merge target that existed but could
+// not be read (permissions, transient I/O) was treated as absent and then
+// atomically rewritten with agentsync's keys alone — silently destroying the
+// user's own config. Only a genuine PARSE failure still degrades to empty, on
+// the theory that a file we cannot understand is one we may as well re-author.
+//
+// Decode preserves json.Number so a foreign integer > 2^53 is not rounded when
+// the merged file is re-marshalled.
 func readJSONFile(path string) (map[string]any, error) {
 	data, err := adapter.ReadExisting(path)
 	if err != nil {

@@ -2,7 +2,6 @@ package continuedev
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"sort"
 
@@ -38,9 +37,12 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 			if ext != ".yaml" && ext != ".yml" && ext != ".json" {
 				continue
 			}
-			data, err := os.ReadFile(filepath.Join(p.MCPDir, e.Name()))
+			data, fileOK, err := adapter.ReadFileOptional(filepath.Join(p.MCPDir, e.Name()))
 			if err != nil {
 				fmt.Fprintf(warn, "warning: skipping MCP block %q: %v\n", e.Name(), err)
+				continue
+			}
+			if !fileOK {
 				continue
 			}
 			var block map[string]any
@@ -104,9 +106,12 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 			if e.IsDir() || filepath.Ext(e.Name()) != ".md" {
 				continue
 			}
-			data, err := os.ReadFile(filepath.Join(p.PromptsDir, e.Name()))
+			data, fileOK, err := adapter.ReadFileOptional(filepath.Join(p.PromptsDir, e.Name()))
 			if err != nil {
 				fmt.Fprintf(warn, "warning: skipping command %q: %v\n", e.Name(), err)
+				continue
+			}
+			if !fileOK {
 				continue
 			}
 			fileName := e.Name()[:len(e.Name())-len(".md")]

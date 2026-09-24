@@ -788,7 +788,7 @@ func TestApply_UnreadableOrphanIsSkippedNotDeleted(t *testing.T) {
 	// one warning would never repeat. The stale file would live forever, which is
 	// the leftover-duplicate failure reclamation exists to prevent.
 	stateKey := state.NewFileKey(tmp, "claude", "user", "", orphan)
-	render.PruneStaleState(st, tmp, "claude", adapter.ScopeUser, "", plan.PerAgent["claude"].Ops)
+	render.PruneStaleState(st, tmp, "claude", adapter.ScopeUser, "", plan.PerAgent["claude"].Ops, render.SharedDests{})
 	if _, stillOwned := st.Files[stateKey]; !stillOwned {
 		t.Fatal("a skipped orphan must keep its state entry so the next apply retries and re-warns")
 	}
