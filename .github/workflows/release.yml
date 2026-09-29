@@ -228,7 +228,8 @@ jobs:
   # it builds and dry-runs the packages, then stops. The job-level permissions
   # REPLACE the workflow default, so grant what the called workflow needs:
   # contents:read (download the Release) and id-token:write (npm provenance +
-  # trusted publishing).
+  # trusted publishing). Only NPM_TOKEN is passed — not `secrets: inherit`, which
+  # would also hand it the Homebrew/Scoop/Chocolatey credentials.
   npm:
     needs: goreleaser
     permissions:
@@ -238,4 +239,5 @@ jobs:
     with:
       # The pushed tag, or the version the manual-dispatch path just tagged.
       tag: ${{ inputs.version || github.ref_name }}
-    secrets: inherit
+    secrets:
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}

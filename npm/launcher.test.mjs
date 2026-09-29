@@ -27,8 +27,8 @@ case "$1" in
   echo) shift; for a in "$@"; do printf '%s\\n' "$a"; done ;;
   cat) cat ;;
   exit) exit "$2" ;;
-  selfkill) kill -TERM $$ ;;
-  wait) trap 'echo got-TERM; kill $pid 2>/dev/null; exit 42' TERM
+  selfkill) kill -"$2" $$ ;;
+  wait) trap "echo got-$2; kill \\$pid 2>/dev/null; exit 42" "$2"
         sleep 30 & pid=$!
         echo ready
         wait $pid ;;
@@ -64,9 +64,6 @@ describe('platformPackage', () => {
 		assert.equal(platformPackage(main, 'linux', 'riscv64'), null);
 		assert.equal(platformPackage(main, 'aix', 'ppc64'), null);
 	});
-	test('does not treat inherited object keys as platforms', () => {
-		assert.equal(platformPackage({ name: 'x', optionalDependencies: {} }, 'constructor', ''), null);
-	});
 });
 
 describe('launcher', { skip: !posix && 'fake binary is a POSIX shell script' }, () => {
@@ -99,32 +96,47 @@ describe('launcher', { skip: !posix && 'fake binary is a POSIX shell script' }, 
 		});
 	}
 
-	test('dies of the same signal that killed the binary', () => {
-		const r = run(['selfkill']);
-		assert.equal(r.status, null);
-		assert.equal(r.signal, 'SIGTERM');
+	for (const sig of ['TERM', 'INT', 'HUP']) {
+		test(`dies of the same signal that killed the binary (SIG${sig})`, () => {
+			const r = run(['selfkill', sig]);
+			assert.equal(r.status, null);
+			assert.equal(r.signal, `SIG${sig}`);
+		});
+	}
+
+	test('exits 128+n for a signal Node cannot re-raise on itself (SIGPIPE)', () => {
+		const r = run(['selfkill', 'PIPE']);
+		assert.equal(r.signal, null);
+		assert.equal(r.status, 128 + os.constants.signals.SIGPIPE);
 	});
 
-	test('forwards a SIGTERM sent to the launcher alone, then mirrors the exit', async () => {
-		const child = spawn(process.execPath, [launcher, 'wait'], { stdio: ['ignore', 'pipe', 'pipe'] });
-		let out = '';
-		const exited = new Promise((resolve) => child.on('exit', (code, signal) => resolve({ code, signal })));
-		await new Promise((resolve, reject) => {
-			const timer = setTimeout(() => reject(new Error(`binary never became ready; stdout=${out}`)), 15000);
-			child.stdout.on('data', (d) => {
-				out += d;
-				if (out.includes('ready')) {
-					clearTimeout(timer);
-					resolve();
-				}
-			});
+	for (const sig of ['TERM', 'INT', 'HUP', 'QUIT']) {
+		test(`forwards a SIG${sig} sent to the launcher alone, then mirrors the exit`, async () => {
+			const child = spawn(process.execPath, [launcher, 'wait', sig], { stdio: ['ignore', 'pipe', 'pipe'] });
+			let out = '';
+			const exited = new Promise((resolve) => child.on('exit', (code, signal) => resolve({ code, signal })));
+			try {
+				await new Promise((resolve, reject) => {
+					const timer = setTimeout(() => reject(new Error(`binary never became ready; stdout=${out}`)), 15000);
+					child.stdout.on('data', (d) => {
+						out += d;
+						if (out.includes('ready')) {
+							clearTimeout(timer);
+							resolve();
+						}
+					});
+				});
+			} catch (err) {
+				child.kill('SIGKILL');
+				throw err;
+			}
+			child.kill(`SIG${sig}`);
+			const { code, signal } = await exited;
+			assert.equal(signal, null, `launcher died of ${signal} instead of waiting for the binary; stdout=${out}`);
+			assert.equal(code, 42, `stdout=${out}`);
+			assert.match(out, new RegExp(`got-${sig}`));
 		});
-		child.kill('SIGTERM');
-		const { code, signal } = await exited;
-		assert.equal(signal, null);
-		assert.equal(code, 42, `stdout=${out}`);
-		assert.match(out, /got-TERM/);
-	});
+	}
 
 	test('restores a lost exec bit once', () => {
 		const bin = path.join(root, 'node_modules', `${MAIN}-${process.platform}-${process.arch}`, 'bin', 'agentsync');

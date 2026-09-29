@@ -17,6 +17,7 @@
 
 const { spawn } = require('node:child_process');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 
 const INSTALL_DOCS = 'https://agentsync.cc/getting-started/install/';
@@ -77,7 +78,7 @@ function main() {
 // covers a package manager that dropped the tarball's exec bit (EACCES): restore
 // it once and retry.
 function run(bin, args, retryChmod) {
-	const child = spawn(bin, args, { stdio: 'inherit', windowsHide: false });
+	const child = spawn(bin, args, { stdio: 'inherit' });
 
 	// While the binary runs, the launcher must neither die first nor swallow a
 	// signal meant for it. A terminal Ctrl-C already reaches the child through the
@@ -128,8 +129,9 @@ function run(bin, args, retryChmod) {
 			// Die of the same signal so the caller (a shell, `set -e`, a CI step) sees
 			// what really happened — e.g. 130 for Ctrl-C — rather than a plain 1.
 			process.kill(process.pid, signal);
-			// Only reached if the signal is ignored or can't be re-raised here.
-			process.exit(1);
+			// Still alive: Node ignores this signal (SIGPIPE) or it can't be raised
+			// here (Windows). Exit with the shell's encoding of it instead.
+			process.exit(128 + (os.constants.signals[signal] || 0));
 		}
 		process.exit(code === null ? 1 : code);
 	});

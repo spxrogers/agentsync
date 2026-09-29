@@ -4,7 +4,7 @@ Centrally manage AI coding-agent configurations. Keep one canonical config in
 `~/.agentsync/` (small TOML + markdown, committable to a dotfiles repo), and
 `agentsync apply` renders it into each agent's native config: Claude Code,
 Codex, Cursor, OpenCode, Gemini CLI, Continue, Windsurf, Roo Code, Cline, Grok
-Build, plus a breadth tier of 22 more.
+Build, plus a breadth tier of 20+ more.
 
 **Docs:** [agentsync.cc](https://agentsync.cc) · **Source:** [github.com/spxrogers/agentsync](https://github.com/spxrogers/agentsync)
 
