@@ -137,6 +137,15 @@ ci: lint test-release
     # Skip sign too: the snapshot signs by default, but cosign is a release-only
     # dep (release.yml installs it); `just ci` proves the cross-build, not signing.
     go run github.com/goreleaser/goreleaser/v2@v2.16.0 release --snapshot --skip=publish,sign --clean
+    just npm-smoke
+
+# npm packaging (`npx agentsync.cc`): unit tests, then build the packages from the
+# goreleaser snapshot in dist/ and install them through npx (+ bunx if present).
+# Needs a snapshot first (`just ci`, or the goreleaser line above).
+npm-smoke:
+    node --test npm/*.test.mjs
+    node npm/build.mjs --dist dist --out dist/npm
+    npm/smoke.sh dist/npm
 
 # Cut a release: validate `v`+semver, then tag & push (which fires the release workflow). Usage: `just release v0.1.0`
 # No laptop? Trigger the same release from the GitHub UI/mobile app instead:

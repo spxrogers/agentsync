@@ -1,6 +1,6 @@
 ---
 title: Install
-description: Install agentsync with Homebrew, Scoop, Chocolatey, or the Linux packages — the recommended path. Building from source still works too.
+description: Install agentsync with Homebrew, Scoop, Chocolatey, the Linux packages, or npm/Bun (npx agentsync.cc) — the recommended paths. Building from source still works too.
 sidebar:
   order: 3
 ---
@@ -83,6 +83,46 @@ import { Tabs, TabItem, Aside, Steps } from '@astrojs/starlight/components';
 		```
 	</TabItem>
 </Tabs>
+
+## npm / Bun (any OS)
+
+Already have Node or Bun? Run agentsync without installing it, or install it
+globally. The npm package is **`agentsync.cc`** (`agentsync` on npm is an
+unrelated project); the command it installs is `agentsync`.
+
+<Tabs syncKey="js-pm">
+	<TabItem label="npm">
+		```bash
+		npx agentsync.cc --version     # run without installing
+		npm install -g agentsync.cc    # install the `agentsync` command
+		```
+	</TabItem>
+	<TabItem label="Bun">
+		```bash
+		bunx agentsync.cc --version    # run without installing
+		bun add -g agentsync.cc        # install the `agentsync` command
+		```
+	</TabItem>
+	<TabItem label="pnpm">
+		```bash
+		pnpm dlx agentsync.cc --version
+		pnpm add -g agentsync.cc
+		```
+	</TabItem>
+</Tabs>
+
+The package is a small Node launcher. The binary itself comes from a platform
+package (`agentsync.cc-<platform>-<arch>`, for linux, darwin, and win32 on x64 and
+arm64) that your package manager installs as an optional dependency. No install
+script runs, so `bunx` and `--ignore-scripts` work. The binaries are the ones
+attached to the matching GitHub Release, checked against its `checksums.txt`
+before packing, and published with [npm provenance](https://docs.npmjs.com/generating-provenance-statements).
+
+<Aside type="caution" title="Don't omit optional dependencies">
+	Installing with `--omit=optional` / `--no-optional`, or from a lockfile made on
+	a different OS or CPU, leaves the platform package out. The launcher then
+	exits with an error naming the missing package. Reinstall without those.
+</Aside>
 
 ## From source
 
