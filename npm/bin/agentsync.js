@@ -80,19 +80,22 @@ function main() {
 			`the platform package ${pkgName}@${mainPkg.version} is not installed.`,
 			'It is an optionalDependency of the package you ran, so it is skipped by',
 			'`--omit=optional` / `--no-optional`, or when the lockfile was made on another',
-			'platform. Reinstall without those, or install it directly:',
+			'platform. Reinstall without those, or install it directly (add -g for a global install):',
 			`  npm install ${pkgName}@${mainPkg.version}`,
 			`Other install options: ${INSTALL_DOCS}`,
 		]);
 	}
 	// require.resolve walks up node_modules, so with the optional dependency
-	// omitted it can find ANOTHER install's copy at a different version. Never
-	// run a binary that isn't the one this launcher was published with.
+	// omitted it can find ANOTHER install's copy (in any ancestor node_modules)
+	// at a different version: refuse that. This checks the version only, not
+	// where the copy lives — confining the lookup would break legitimate layouts
+	// (hoisted npm installs, pnpm's store, Yarn PnP) — so like any Node package,
+	// the launcher trusts whoever can write to its ancestor node_modules.
 	if (resolved.version !== mainPkg.version) {
 		fail([
 			`found ${pkgName}@${resolved.version}, but the launcher is ${mainPkg.name}@${mainPkg.version}.`,
 			'The platform package must be the same version (this one came from another install).',
-			'Reinstall, or install it directly:',
+			'Reinstall, or install it directly (add -g for a global install):',
 			`  npm install ${pkgName}@${mainPkg.version}`,
 			`Other install options: ${INSTALL_DOCS}`,
 		]);

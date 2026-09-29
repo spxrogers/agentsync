@@ -29,7 +29,7 @@ case "$1" in
   exit) exit "$2" ;;
   selfkill) kill -"$2" $$ ;;
   sleep) exec sleep 30 ;;
-  wait) trap "echo got-$2; kill \\$pid 2>/dev/null; exit 42" "$2"
+  wait) trap "echo got-$2; kill -9 \\$pid 2>/dev/null; exit 42" "$2"
         sleep 30 & pid=$!
         echo ready
         wait $pid ;;
