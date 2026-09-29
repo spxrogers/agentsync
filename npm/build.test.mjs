@@ -12,7 +12,7 @@ import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, test } from 'node:test';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import {
 	MAIN_PACKAGE,
@@ -291,8 +291,8 @@ describe('build', { skip: !haveTools && 'needs zip and tar' }, () => {
 
 	test('refuses an --out that would delete the release', () => {
 		withRelease('2.0.0', {}, ({ root, dist }) => {
-			assert.throws(() => build({ dist, outDir: dist }), /would delete --dist/);
-			assert.throws(() => build({ dist, outDir: root }), /would delete --dist/);
+			assert.throws(() => build({ dist, outDir: dist }), /would delete --dist \(.*\/dist\)/);
+			assert.throws(() => build({ dist, outDir: root }), /would delete --dist \(.*\/dist\)/);
 			assert.ok(fs.existsSync(path.join(dist, 'checksums.txt')), 'the release survived');
 		});
 	});
@@ -308,16 +308,34 @@ describe('build', { skip: !haveTools && 'needs zip and tar' }, () => {
 			const home = process.env.HOME;
 			try {
 				process.chdir(inside);
-				assert.throws(() => build({ dist, outDir: path.join(root, 'x', '..', 'inside') }), /would delete the working directory/);
+				assert.throws(() => build({ dist, outDir: path.join(root, 'x', '..', 'inside') }), /would delete the working directory \(.*inside\)/);
 				process.chdir(cwd);
 				process.env.HOME = inside;
-				assert.throws(() => build({ dist, outDir: inside }), /would delete the home directory/);
+				assert.throws(() => build({ dist, outDir: inside }), /would delete the home directory \(.*inside\)/);
 			} finally {
 				process.chdir(cwd);
 				process.env.HOME = home;
 			}
 			assert.ok(fs.existsSync(inside), 'nothing was deleted');
 		});
+	});
+
+	// The repository-root row, pinned without ever aiming at the real checkout:
+	// a copy of build.mjs inside the private root believes <root>/repo is the
+	// repository, so a regressed guard can only delete that.
+	test('refuses an --out that would delete the repository', async () => {
+		const rel = fakeRelease('2.0.0');
+		try {
+			const repo = path.join(rel.root, 'repo');
+			fs.mkdirSync(path.join(repo, 'npm', 'bin'), { recursive: true });
+			fs.copyFileSync(path.join(here, 'build.mjs'), path.join(repo, 'npm', 'build.mjs'));
+			fs.writeFileSync(path.join(repo, 'LICENSE'), 'license\n');
+			const copy = await import(pathToFileURL(path.join(repo, 'npm', 'build.mjs')).href);
+			assert.throws(() => copy.build({ dist: rel.dist, outDir: repo }), /would delete the repository \(.*repo\)/);
+			assert.ok(fs.existsSync(path.join(repo, 'npm', 'build.mjs')), 'the repository survived');
+		} finally {
+			fs.rmSync(rel.root, { recursive: true, force: true });
+		}
 	});
 });
 

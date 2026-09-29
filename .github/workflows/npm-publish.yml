@@ -13,16 +13,19 @@ name: npm-publish
 #      publish (or finish publishing) an EXISTING release without re-running
 #      GoReleaser — to recover a failed npm step, or to backfill a version tagged
 #      before npm/ existed. The ref you start it from doesn't matter: the job
-#      checks out the TAG and packages with the npm/ tooling it carries (falling
-#      back to the default branch's only when the tag predates npm/).
+#      checks out the TAG and packages with the npm/ tooling and Node pin
+#      (npm/.node-version) it carries, falling back to the default branch's only
+#      when the tag predates npm/. Only the workflow steps themselves come from
+#      the ref you start it from, which is why they call npm/build.mjs through a
+#      fixed CLI (see its header).
 #
 # It never rebuilds anything: it downloads the release's archives + checksums.txt
 # from the GitHub Release, and npm/build.mjs sha256-checks every archive before
 # packing its binary, so npm ships exactly the bytes the Release ships. Re-running
 # is safe: a name@version already on the registry is skipped when its tarball is
 # identical to ours, and FAILS the run when it isn't — the launcher must never pin
-# a platform package whose bytes we didn't build. Building from the tag with a
-# pinned Node is what keeps a re-run byte-identical. A stable version older than the
+# a platform package whose bytes we didn't build. Building from the tag with the
+# tag's pinned Node is what keeps a re-run byte-identical. A stable version older than the
 # current `latest` is published under the `backfill` dist-tag, so backfilling
 # never downgrades `npx agentsync.cc`.
 #
@@ -120,20 +123,21 @@ jobs:
         if: steps.tooling.outputs.from-tag == 'false'
         with:
           ref: ${{ github.event.repository.default_branch }}
-      # Pinned exactly: npm's tarball integrity hashes the gzip stream, which
-      # depends on Node's zlib, so a floating Node could make an identical re-run
-      # look like a different build. Node 24.21.0 bundles npm 11.19.0, which
-      # trusted publishing needs (>= 11.5.1). Bump deliberately, between releases.
+      # Node is pinned exactly, in the checked-out tree (npm/.node-version), so the
+      # pin travels with the tag like the rest of the tooling: npm's tarball
+      # integrity hashes the gzip stream, which depends on Node's zlib, and a
+      # different Node could make an identical re-run look like a different
+      # build. The pin must bundle npm >= 11.5.1 (trusted publishing).
       - uses: actions/setup-node@v4
         with:
-          node-version: 24.21.0
+          node-version-file: npm/.node-version
           registry-url: https://registry.npmjs.org
       - name: Check npm supports trusted publishing (>= 11.5.1)
         if: steps.auth.outputs.mode == 'oidc'
         run: |
           v="$(npm --version)"
           if [ "$(printf '%s\n' 11.5.1 "$v" | sort -V | head -1)" != 11.5.1 ]; then
-            echo "::error::npm $v is too old for trusted publishing (needs >= 11.5.1); bump setup-node's node-version"
+            echo "::error::npm $v is too old for trusted publishing (needs >= 11.5.1); bump npm/.node-version"
             exit 1
           fi
           echo "npm $v"

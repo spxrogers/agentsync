@@ -256,7 +256,7 @@ jobs:
       # and bunx run the snapshot binary. The real publish is npm-publish.yml.
       - uses: actions/setup-node@v4
         with:
-          node-version: 24
+          node-version-file: npm/.node-version
       - uses: oven-sh/setup-bun@v2
       - name: npm packaging tests + install smoke (npx, bunx)
         run: |

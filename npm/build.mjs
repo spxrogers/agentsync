@@ -19,6 +19,11 @@
 // The platform packages live in the maintainer's npm scope so nobody else can
 // publish under their names (squatting); users only ever type `agentsync.cc`.
 //
+// FROZEN CLI: .github/workflows/npm-publish.yml runs the tag's copy of this
+// script with the flags above, but its steps come from whichever ref the run was
+// started from (possibly a newer default branch). Keep every flag above working
+// with the same meaning; add new ones, never rename or remove one.
+//
 // --publish publishes the platform packages first, then the launcher (so its
 // optionalDependencies always resolve). A name@version already on the registry
 // is skipped ONLY if its tarball is byte-identical to ours (same sha512
