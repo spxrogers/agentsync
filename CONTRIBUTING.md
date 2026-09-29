@@ -186,6 +186,18 @@ backfill, or the pinned Node version). If a re-run can't fix it, cut a patch
 release. A stable version older than the current `latest` goes to the
 `backfill` dist-tag, so backfilling never downgrades `npx agentsync.cc`.
 
+Because a release is packaged with *its own* `npm/` tooling and Node pin
+(`npm/.node-version`), a fix to the launcher or the build script reaches npm only
+with the next release; re-publishing an old one never picks it up. (npm
+versions are immutable anyway.) Bump `npm/.node-version` between releases, never
+between a failed publish and its re-run.
+
+The workflow's own guard against a wrong ref is gone: it always packages the
+tag. It is not a security boundary either way, since anyone who can push to the
+repository can edit the workflow. To gate publishing on review, put the job in a
+GitHub `environment:` restricted to `v*` tags with required reviewers, and bind
+the npm trusted publishers to that environment.
+
 CI builds the packages from every goreleaser snapshot and installs them through
 npx and bunx (`npm/smoke.sh`); `node --test npm/*.test.mjs` runs the unit tests.
 `just ci` runs both, so it needs Node (and optionally Bun) alongside Go.

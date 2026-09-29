@@ -8,8 +8,9 @@
 // exactly the one matching this machine. There is deliberately NO postinstall:
 // `bunx` (and `npm --ignore-scripts`) skip install scripts, and this layout needs
 // none. The launcher finds that platform package, then runs its binary with the
-// same argv/stdio and exits with the binary's exit status (or re-raises the
-// signal that killed it).
+// same argv/stdio and exits with the binary's exit status, or re-raises the
+// signal that killed it (exiting 128+n instead for SIGPIPE/SIGUSR1, which Node
+// handles itself).
 //
 // Generated package layout and publishing live in npm/build.mjs. Keep this file
 // dependency-free CommonJS: it runs under whatever Node (or Bun) the user has.
@@ -89,9 +90,11 @@ function main() {
 	// run a binary that isn't the one this launcher was published with.
 	if (resolved.version !== mainPkg.version) {
 		fail([
-			`found ${pkgName}@${resolved.version}, but this is ${mainPkg.name}@${mainPkg.version}.`,
-			'The platform package must be the same version. Reinstall, or install it directly:',
+			`found ${pkgName}@${resolved.version}, but the launcher is ${mainPkg.name}@${mainPkg.version}.`,
+			'The platform package must be the same version (this one came from another install).',
+			'Reinstall, or install it directly:',
 			`  npm install ${pkgName}@${mainPkg.version}`,
+			`Other install options: ${INSTALL_DOCS}`,
 		]);
 	}
 	run(resolved.bin, process.argv.slice(2));
@@ -175,7 +178,7 @@ function run(bin, args) {
 	start();
 }
 
-module.exports = { platformPackage, resolvePlatform };
+module.exports = { platformPackage };
 
 if (require.main === module) {
 	main();

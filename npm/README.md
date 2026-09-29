@@ -37,7 +37,8 @@ checked against the release's `checksums.txt` before they're packed.
 
 If the launcher reports that the platform package is missing, you installed with
 `--omit=optional` / `--no-optional`, or with a lockfile generated on a different
-platform. Reinstall without them.
+platform. Reinstall without them. If it reports a platform package at a
+different version, it found another install's copy; reinstall so the two match.
 
 Other install options (Homebrew, Scoop, Chocolatey, deb/rpm, `go install`) are
 listed at [agentsync.cc/getting-started/install](https://agentsync.cc/getting-started/install/).

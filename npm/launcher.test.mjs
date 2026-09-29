@@ -160,7 +160,9 @@ describe('launcher', { skip: !posix && 'fake binary is a POSIX shell script' }, 
 	// preload arms a --require hook that wraps child_process.spawn: on the Nth
 	// spawn it records the child's pid and immediately SIGTERMs the launcher —
 	// the tightest window there is between starting the binary and the launcher
-	// being ready to forward. Test-only; the launcher knows nothing of it.
+	// being ready to forward. Test-only; the launcher knows nothing of it. It
+	// counts spawn() calls, so it assumes the launcher's Nth spawn is the binary:
+	// if the launcher ever spawns anything else first, update N at the call sites.
 	function preload(dir) {
 		const file = path.join(dir, 'preload.cjs');
 		fs.writeFileSync(
@@ -196,11 +198,15 @@ cp.spawn = function (...args) {
 		const pidfile = path.join(dir, 'pid');
 		let pid;
 		try {
+			// stdio 'ignore': an orphaned binary holding our pipes must not make
+			// spawnSync wait for it — the launcher's own death is what we time.
 			const r = spawnSync(process.execPath, ['--require', preload(dir), launcher, 'sleep'], {
-				encoding: 'utf8',
+				stdio: 'ignore',
 				timeout: 20000,
+				killSignal: 'SIGKILL',
 				env: { ...process.env, PRELOAD_SIGNAL_ON_SPAWN: '1', PRELOAD_PIDFILE: pidfile },
 			});
+			assert.equal(r.error, undefined, 'the launcher hung');
 			pid = Number(fs.readFileSync(pidfile, 'utf8'));
 			assert.ok(pid > 0, 'the binary was spawned');
 			assert.equal(r.signal, 'SIGTERM', 'the launcher mirrors the forwarded SIGTERM');
@@ -220,6 +226,7 @@ cp.spawn = function (...args) {
 			const r = spawnSync(process.execPath, ['--require', preload(dir), launcher, 'sleep'], {
 				encoding: 'utf8',
 				timeout: 15000,
+				killSignal: 'SIGKILL', // the launcher intercepts spawnSync's default SIGTERM
 				env: { ...process.env, PRELOAD_SIGNAL_ON_SPAWN: '1', PRELOAD_PIDFILE: path.join(dir, 'pid') },
 			});
 			assert.equal(r.error, undefined, 'the retried binary ignored the signal and ran on');
@@ -237,6 +244,24 @@ cp.spawn = function (...args) {
 		assert.equal(r.status, 0, r.stderr);
 		assert.equal(r.stdout, 'ok\n');
 		assert.equal(fs.statSync(bin).mode & 0o111, 0o111);
+	});
+
+	test('retries the exec bit only once, then fails', () => {
+		// A directory in the binary's place fails spawn() with EACCES even after
+		// chmod 0755, so an unbounded retry would loop forever.
+		const other = fs.mkdtempSync(path.join(os.tmpdir(), 'agentsync-launcher-'));
+		try {
+			const l = installFixture(other, { withPlatform: true });
+			const bin = path.join(other, 'node_modules', '@spxrogers', `${MAIN}-${process.platform}-${process.arch}`, 'bin', 'agentsync');
+			fs.rmSync(bin);
+			fs.mkdirSync(bin);
+			const r = spawnSync(process.execPath, [l, 'echo', 'x'], { encoding: 'utf8', timeout: 10000, killSignal: 'SIGKILL' });
+			assert.equal(r.error, undefined, 'the launcher kept retrying');
+			assert.equal(r.status, 1);
+			assert.match(r.stderr, /failed to run .*EACCES/);
+		} finally {
+			fs.rmSync(other, { recursive: true, force: true });
+		}
 	});
 });
 
@@ -261,7 +286,7 @@ describe('launcher refusing to run', () => {
 			const r = spawnSync(process.execPath, [launcher, 'echo', 'ran'], { encoding: 'utf8', timeout: 20000 });
 			assert.equal(r.status, 1);
 			assert.equal(r.stdout, '', 'the mismatched binary must not run');
-			assert.match(r.stderr, new RegExp(`found @spxrogers/${MAIN}-${process.platform}-${process.arch}@9\\.9\\.9, but this is ${MAIN}@${VERSION.replaceAll('.', '\\.')}`));
+			assert.match(r.stderr, new RegExp(`found @spxrogers/${MAIN}-${process.platform}-${process.arch}@9\\.9\\.9, but the launcher is ${MAIN}@${VERSION.replaceAll('.', '\\.')}`));
 		} finally {
 			fs.rmSync(root, { recursive: true, force: true });
 		}

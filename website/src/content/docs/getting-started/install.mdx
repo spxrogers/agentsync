@@ -121,7 +121,9 @@ before packing, and published with [npm provenance](https://docs.npmjs.com/gener
 <Aside type="caution" title="Don't omit optional dependencies">
 	Installing with `--omit=optional` / `--no-optional`, or from a lockfile made on
 	a different OS or CPU, leaves the platform package out. The launcher then
-	exits with an error naming the missing package. Reinstall without those.
+	exits with an error naming the missing package. Reinstall without those. It
+	also refuses to run a platform package from another install at a different
+	version; reinstall so they match.
 </Aside>
 
 ## From source
