@@ -5,7 +5,7 @@
 //
 //   node --test npm/*.test.mjs
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
@@ -19,8 +19,10 @@ import {
 	TARGETS,
 	archiveName,
 	binaryName,
+	PLATFORM_SCOPE,
 	build,
 	compareVersions,
+	contains,
 	distTag,
 	inferVersion,
 	mainPackageJSON,
@@ -54,6 +56,12 @@ describe('targets', () => {
 		const main = mainPackageJSON('1.0.0');
 		for (const t of TARGETS) {
 			assert.equal(platformPackage(main, t.platform, t.arch), platformPackageName(t));
+		}
+	});
+
+	test('platform packages live in the maintainer scope', () => {
+		for (const t of TARGETS) {
+			assert.ok(platformPackageName(t).startsWith(`${PLATFORM_SCOPE}/${MAIN_PACKAGE}-`), platformPackageName(t));
 		}
 	});
 });
@@ -90,6 +98,15 @@ describe('package metadata', () => {
 		assert.equal(distTag('0.16.0', '0.16.0'), 'latest', 're-running the current latest');
 		assert.equal(distTag('0.16.1', '0.16.0'), 'latest');
 		assert.equal(distTag('1.0.0', '1.0.0-rc.2'), 'latest', 'a release outranks its own rc');
+	});
+
+	test('a prerelease latest (the registry tags a first publish latest) never forces backfill', () => {
+		assert.equal(distTag('0.9.0', '1.0.0-rc.1'), 'latest');
+	});
+
+	test('build metadata is not a prerelease', () => {
+		assert.equal(distTag('1.0.0+build-1', null), 'latest');
+		assert.equal(distTag('1.0.0-rc.1+build', null), 'next');
 	});
 
 	test('compareVersions follows semver precedence', () => {
@@ -131,19 +148,24 @@ const haveTools = (() => {
 	}
 })();
 
-// fakeRelease writes a GoReleaser-shaped dist: one archive per target (binary +
-// the LICENSE/README goreleaser bundles) and checksums.txt over them. Binaries
-// are written 0644 so the builder's chmod is what makes them executable.
-// symlinkFor names a goos whose `agentsync` member is a symlink instead.
-function fakeRelease(version, { symlinkFor } = {}) {
-	const dist = fs.mkdtempSync(path.join(os.tmpdir(), 'agentsync-dist-'));
-	const stage = fs.mkdtempSync(path.join(os.tmpdir(), 'agentsync-stage-'));
+// fakeRelease writes a GoReleaser-shaped dist at <root>/dist: one archive per
+// target (binary + the README goreleaser bundles) and checksums.txt over them.
+// The dist is one level below a private root, so a test can aim --out at the
+// root (a parent of --dist) without a regressed guard ever reaching os.tmpdir().
+// Binaries are written 0644 so the builder's chmod is what makes them executable.
+//   broken: { goos: 'symlink' | 'empty' } replaces that goos's binary member.
+function fakeRelease(version, { broken = {} } = {}) {
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agentsync-dist-'));
+	const dist = path.join(root, 'dist');
+	const stage = path.join(root, 'stage');
+	fs.mkdirSync(dist);
 	const lines = [];
 	for (const t of TARGETS) {
 		const dir = path.join(stage, `${t.goos}_${t.goarch}`);
-		fs.mkdirSync(dir);
-		if (t.goos === symlinkFor) fs.symlinkSync('/etc/hostname', path.join(dir, binaryName(t)));
-		else fs.writeFileSync(path.join(dir, binaryName(t)), `binary for ${t.goos}/${t.goarch}\n`, { mode: 0o644 });
+		fs.mkdirSync(dir, { recursive: true });
+		const bin = path.join(dir, binaryName(t));
+		if (broken[t.goos] === 'symlink') fs.symlinkSync('/etc/hostname', bin);
+		else fs.writeFileSync(bin, broken[t.goos] === 'empty' ? '' : `binary for ${t.goos}/${t.goarch}\n`, { mode: 0o644 });
 		fs.writeFileSync(path.join(dir, 'README.md'), 'readme\n');
 		const archive = path.join(dist, archiveName(version, t));
 		if (t.goos === 'windows') execFileSync('zip', ['-q', '--symlinks', archive, binaryName(t), 'README.md'], { cwd: dir });
@@ -152,120 +174,149 @@ function fakeRelease(version, { symlinkFor } = {}) {
 	}
 	fs.writeFileSync(path.join(dist, 'checksums.txt'), `${lines.join('\n')}\n`);
 	fs.rmSync(stage, { recursive: true, force: true });
-	return dist;
+	return { root, dist, out: path.join(root, 'npm') };
+}
+
+function withRelease(version, opts, fn) {
+	const rel = fakeRelease(version, opts);
+	try {
+		fn(rel);
+	} finally {
+		fs.rmSync(rel.root, { recursive: true, force: true });
+	}
 }
 
 test('zip and tar are available where CI runs the build() suite', { skip: !process.env.CI }, () => {
 	assert.ok(haveTools, 'the build() suite below would be skipped');
 });
 
-describe('build', { skip: !haveTools && 'needs zip and tar' }, () => {
-	test('assembles every package from verified archives', () => {
-		const dist = fakeRelease('2.0.0');
-		const out = path.join(dist, 'npm');
-		try {
-			const { version, dirs } = build({ dist, outDir: out, expectVersion: '2.0.0' });
-			assert.equal(version, '2.0.0');
-			assert.equal(dirs.length, TARGETS.length + 1);
-			assert.equal(path.basename(dirs.at(-1)), MAIN_PACKAGE, 'launcher publishes last');
-			for (const t of TARGETS) {
-				const bin = path.join(out, platformPackageName(t), 'bin', binaryName(t));
-				assert.equal(fs.readFileSync(bin, 'utf8'), `binary for ${t.goos}/${t.goarch}\n`);
-				assert.equal(fs.statSync(bin).mode & 0o777, 0o755);
-				assert.deepEqual(fs.readFileSync(path.join(out, platformPackageName(t), 'LICENSE')), fs.readFileSync(path.join(here, '..', 'LICENSE')));
-			}
-			assert.deepEqual(fs.readFileSync(path.join(out, MAIN_PACKAGE, 'LICENSE')), fs.readFileSync(path.join(here, '..', 'LICENSE')));
-			assert.deepEqual(fs.readFileSync(path.join(out, MAIN_PACKAGE, 'README.md')), fs.readFileSync(path.join(here, 'README.md')));
-			assert.equal(fs.statSync(path.join(out, MAIN_PACKAGE, 'bin', 'agentsync.js')).mode & 0o777, 0o755);
-			const main = JSON.parse(fs.readFileSync(path.join(out, MAIN_PACKAGE, 'package.json'), 'utf8'));
-			assert.deepEqual(main, mainPackageJSON('2.0.0'));
-			assert.equal(
-				fs.readFileSync(path.join(out, MAIN_PACKAGE, 'bin', 'agentsync.js'), 'utf8'),
-				fs.readFileSync(path.join(here, 'bin', 'agentsync.js'), 'utf8'),
-			);
-		} finally {
-			fs.rmSync(dist, { recursive: true, force: true });
-		}
+describe('contains (the --out guard)', () => {
+	test('is true for the path itself and anything beneath it', () => {
+		assert.ok(contains('/a/b', '/a/b'));
+		assert.ok(contains('/a', '/a/b/c'));
+		assert.ok(contains('/a', '/a/..foo/dist'), 'a child whose name starts with ".." is still inside');
 	});
-
-	test('refuses a tampered archive', () => {
-		const dist = fakeRelease('2.0.0');
-		try {
-			fs.appendFileSync(path.join(dist, archiveName('2.0.0', TARGETS[0])), 'x');
-			assert.throws(() => build({ dist, outDir: path.join(dist, 'npm') }), /checksum mismatch/);
-		} finally {
-			fs.rmSync(dist, { recursive: true, force: true });
-		}
+	test('is false for siblings and parents', () => {
+		assert.ok(!contains('/a/b', '/a/c'));
+		assert.ok(!contains('/a/b', '/a'));
+		assert.ok(!contains('/a/b', '/a/bc'));
 	});
-
-	test('refuses a release missing a target', () => {
-		const dist = fakeRelease('2.0.0');
+	test('sees through symlinks', () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agentsync-contains-'));
 		try {
-			fs.rmSync(path.join(dist, archiveName('2.0.0', TARGETS[5])));
-			assert.throws(() => build({ dist, outDir: path.join(dist, 'npm') }), /missing release archive/);
+			fs.mkdirSync(path.join(root, 'real', 'dist'), { recursive: true });
+			fs.symlinkSync(path.join(root, 'real'), path.join(root, 'link'));
+			assert.ok(contains(path.join(root, 'real'), path.join(root, 'link', 'dist')));
+			assert.ok(contains(path.join(root, 'link'), path.join(root, 'real', 'dist')));
 		} finally {
-			fs.rmSync(dist, { recursive: true, force: true });
-		}
-	});
-
-	test('refuses an archive checksums.txt does not list', () => {
-		const dist = fakeRelease('2.0.0');
-		try {
-			const sums = path.join(dist, 'checksums.txt');
-			const keep = fs.readFileSync(sums, 'utf8').split('\n').filter((l) => !l.includes('darwin_arm64'));
-			fs.writeFileSync(sums, keep.join('\n'));
-			assert.throws(() => build({ dist, outDir: path.join(dist, 'npm') }), /no entry for agentsync_2\.0\.0_darwin_arm64/);
-		} finally {
-			fs.rmSync(dist, { recursive: true, force: true });
-		}
-	});
-
-	test('refuses an --expect-version that disagrees with the archives', () => {
-		const dist = fakeRelease('2.0.0');
-		try {
-			assert.throws(() => build({ dist, outDir: path.join(dist, 'npm'), expectVersion: '2.0.1' }), /does not match/);
-		} finally {
-			fs.rmSync(dist, { recursive: true, force: true });
-		}
-	});
-
-	test('refuses a version that is not semver', () => {
-		const dist = fakeRelease('2.0');
-		try {
-			assert.throws(() => build({ dist, outDir: path.join(dist, 'npm') }), /not valid semver/);
-		} finally {
-			fs.rmSync(dist, { recursive: true, force: true });
-		}
-	});
-
-	for (const goos of ['linux', 'windows']) {
-		test(`refuses a symlinked binary member (${goos})`, () => {
-			const dist = fakeRelease('2.0.0', { symlinkFor: goos });
-			try {
-				assert.throws(() => build({ dist, outDir: path.join(dist, 'npm') }), /is not a regular non-empty file/);
-			} finally {
-				fs.rmSync(dist, { recursive: true, force: true });
-			}
-		});
-	}
-
-	test('refuses an --out that would delete the release', () => {
-		const dist = fakeRelease('2.0.0');
-		try {
-			assert.throws(() => build({ dist, outDir: dist }), /would delete --dist/);
-			assert.throws(() => build({ dist, outDir: path.dirname(dist) }), /would delete --dist/);
-			assert.ok(fs.existsSync(path.join(dist, 'checksums.txt')), 'the release survived');
-		} finally {
-			fs.rmSync(dist, { recursive: true, force: true });
+			fs.rmSync(root, { recursive: true, force: true });
 		}
 	});
 });
 
+describe('build', { skip: !haveTools && 'needs zip and tar' }, () => {
+	test('assembles every package from verified archives', () => {
+		withRelease('2.0.0', {}, ({ dist, out }) => {
+			// A restrictive umask must not change what gets packed (0600 files would
+			// change the tarball's integrity and break identical re-runs).
+			const umask = process.umask(0o077);
+			let built;
+			try {
+				built = build({ dist, outDir: out, expectVersion: '2.0.0' });
+			} finally {
+				process.umask(umask);
+			}
+			const { version, dirs } = built;
+			assert.equal(version, '2.0.0');
+			assert.equal(dirs.length, TARGETS.length + 1);
+			assert.equal(path.basename(dirs.at(-1)), MAIN_PACKAGE, 'launcher publishes last');
+			const license = fs.readFileSync(path.join(here, '..', 'LICENSE'));
+			for (const t of TARGETS) {
+				const pkgDir = path.join(out, platformPackageName(t));
+				const bin = path.join(pkgDir, 'bin', binaryName(t));
+				assert.equal(fs.readFileSync(bin, 'utf8'), `binary for ${t.goos}/${t.goarch}\n`);
+				assert.equal(fs.statSync(bin).mode & 0o777, 0o755);
+				assert.deepEqual(fs.readFileSync(path.join(pkgDir, 'LICENSE')), license);
+				for (const f of ['LICENSE', 'README.md', 'package.json']) {
+					assert.equal(fs.statSync(path.join(pkgDir, f)).mode & 0o777, 0o644, `${f}: umask must not leak into the tarball`);
+				}
+			}
+			const mainDir = path.join(out, MAIN_PACKAGE);
+			assert.deepEqual(JSON.parse(fs.readFileSync(path.join(mainDir, 'package.json'), 'utf8')), mainPackageJSON('2.0.0'));
+			assert.deepEqual(fs.readFileSync(path.join(mainDir, 'LICENSE')), license);
+			assert.deepEqual(fs.readFileSync(path.join(mainDir, 'README.md')), fs.readFileSync(path.join(here, 'README.md')));
+			assert.deepEqual(fs.readFileSync(path.join(mainDir, 'bin', 'agentsync.js')), fs.readFileSync(path.join(here, 'bin', 'agentsync.js')));
+			assert.equal(fs.statSync(path.join(mainDir, 'bin', 'agentsync.js')).mode & 0o777, 0o755);
+		});
+	});
+
+	const refusals = [
+		['a tampered archive', {}, ({ dist }) => fs.appendFileSync(path.join(dist, archiveName('2.0.0', TARGETS[0])), 'x'), /checksum mismatch/],
+		['a release missing a target', {}, ({ dist }) => fs.rmSync(path.join(dist, archiveName('2.0.0', TARGETS[5]))), /missing release archive/],
+		[
+			'an archive checksums.txt does not list',
+			{},
+			({ dist }) => {
+				const sums = path.join(dist, 'checksums.txt');
+				fs.writeFileSync(sums, fs.readFileSync(sums, 'utf8').split('\n').filter((l) => !l.includes('darwin_arm64')).join('\n'));
+			},
+			/no entry for agentsync_2\.0\.0_darwin_arm64/,
+		],
+		['a symlinked binary member (tar)', { broken: { linux: 'symlink' } }, () => {}, /is not a regular non-empty file/],
+		['a symlinked binary member (zip)', { broken: { windows: 'symlink' } }, () => {}, /is not a regular non-empty file/],
+		['an empty binary member', { broken: { darwin: 'empty' } }, () => {}, /is not a regular non-empty file/],
+	];
+	for (const [what, opts, tamper, err] of refusals) {
+		test(`refuses ${what}`, () => {
+			withRelease('2.0.0', opts, (rel) => {
+				tamper(rel);
+				assert.throws(() => build({ dist: rel.dist, outDir: rel.out }), err);
+			});
+		});
+	}
+
+	test('refuses an --expect-version that disagrees with the archives', () => {
+		withRelease('2.0.0', {}, ({ dist, out }) => {
+			assert.throws(() => build({ dist, outDir: out, expectVersion: '2.0.1' }), /does not match/);
+		});
+	});
+
+	test('refuses a version that is not semver', () => {
+		withRelease('2.0', {}, ({ dist, out }) => {
+			assert.throws(() => build({ dist, outDir: out }), /not valid semver/);
+		});
+	});
+
+	test('refuses an --out that would delete the release', () => {
+		withRelease('2.0.0', {}, ({ root, dist }) => {
+			assert.throws(() => build({ dist, outDir: dist }), /would delete --dist/);
+			assert.throws(() => build({ dist, outDir: root }), /would delete --dist/);
+			assert.ok(fs.existsSync(path.join(dist, 'checksums.txt')), 'the release survived');
+		});
+	});
+});
+
+test('the CLI runs through a symlinked path and rejects --dry-run without --publish', () => {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentsync-cli-'));
+	try {
+		const link = path.join(dir, 'build.mjs');
+		fs.symlinkSync(path.join(here, 'build.mjs'), link);
+		const r = spawnSync(process.execPath, [link, '--dist', dir, '--dry-run'], { encoding: 'utf8' });
+		assert.equal(r.status, 2, `stderr=${r.stderr}`);
+		assert.match(r.stderr, /^usage: node npm\/build\.mjs/);
+	} finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+});
+
 // fakeNpm writes an executable standing in for `npm`: it answers `view`/`pack`
-// from a registry state object and appends every invocation's argv to a log.
+// from a registry state object and appends every invocation's argv to a log. It
+// is strict about the flags publish() relies on (--json on reads, --dry-run on
+// pack), so dropping one fails the test instead of silently hitting real npm.
 //   state.latest       the launcher's dist-tags.latest (absent → E404)
 //   state.published    { name: integrity } of name@version already on the registry
-//   state.ours         integrity `npm pack --dry-run` reports for every dir
+//   state.publisher    what `view name@version _npmUser` answers
+//   state.ours         { name: integrity } `npm pack --dry-run` reports per package
 //   state.viewError    stderr for a non-404 `npm view` failure (e.g. auth)
 function fakeNpm(state) {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentsync-fakenpm-'));
@@ -279,15 +330,26 @@ const path = require('node:path');
 const state = ${JSON.stringify(state)};
 const argv = process.argv.slice(2);
 fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify(argv) + '\\n');
-const e404 = () => { process.stderr.write('npm error code E404\\n'); process.exit(1); };
+const die = (msg) => { process.stderr.write(msg + '\\n'); process.exit(1); };
+const e404 = () => die('npm error code E404');
+if (argv[0] === 'view' || argv[0] === 'pack') {
+	if (!argv.includes('--json')) die('fake npm: ' + argv[0] + ' called without --json');
+}
 if (argv[0] === 'view') {
-	if (state.viewError) { process.stderr.write(state.viewError); process.exit(1); }
+	if (state.viewError) die(state.viewError);
 	const [spec, field] = [argv[1], argv[2]];
 	if (field === 'dist-tags.latest') return state.latest ? console.log(JSON.stringify(state.latest)) : e404();
 	const name = spec.slice(0, spec.lastIndexOf('@'));
-	return name in (state.published || {}) ? console.log(JSON.stringify(state.published[name])) : e404();
+	if (!(name in (state.published || {}))) return e404();
+	if (field === '_npmUser') return console.log(JSON.stringify(state.publisher || 'someone'));
+	if (field === 'dist.integrity') return console.log(JSON.stringify(state.published[name]));
+	die('fake npm: unexpected view field ' + field);
 }
-if (argv[0] === 'pack') return console.log(JSON.stringify([{ integrity: state.ours }]));
+if (argv[0] === 'pack') {
+	if (!argv.includes('--dry-run')) die('fake npm: pack without --dry-run would write a tarball');
+	const { name } = JSON.parse(fs.readFileSync(path.join(argv[1], 'package.json'), 'utf8'));
+	return console.log(JSON.stringify([{ integrity: (state.ours || {})[name] }]));
+}
 `,
 		{ mode: 0o755 },
 	);
@@ -305,21 +367,27 @@ function packageDirs(version) {
 	const pkgs = [...TARGETS.map((t) => platformPackageJSON(version, t)), mainPackageJSON(version)];
 	const dirs = pkgs.map((pkg) => {
 		const dir = path.join(root, pkg.name);
-		fs.mkdirSync(dir);
+		fs.mkdirSync(dir, { recursive: true });
 		fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify(pkg));
 		return dir;
 	});
 	return { root, dirs, names: pkgs.map((p) => p.name) };
 }
 
-describe('publish', { skip: process.platform === 'win32' && 'fake npm is a shebang script' }, () => {
-	const publishCalls = (calls) => calls.filter((c) => c[0] === 'publish');
+// sameIntegrity builds a state.ours map giving every package the same integrity.
+const sameIntegrity = (names, integrity) => Object.fromEntries(names.map((n) => [n, integrity]));
 
+describe('publish', { skip: process.platform === 'win32' && 'fake npm is a shebang script' }, () => {
 	function withRegistry(state, version, fn) {
-		const npm = fakeNpm(state);
 		const pkgs = packageDirs(version);
+		const npm = fakeNpm(typeof state === 'function' ? state(pkgs.names) : state);
+		const published = () =>
+			npm
+				.calls()
+				.filter((c) => c[0] === 'publish')
+				.map((c) => ({ name: path.relative(pkgs.root, c[1]).split(path.sep).join('/'), flags: c.slice(2) }));
 		try {
-			fn({ npm, pkgs, run: (opts = {}) => publish({ version, dirs: pkgs.dirs, npmBin: npm.bin, log: () => {}, ...opts }) });
+			fn({ npm, pkgs, published, run: (opts = {}) => publish({ version, dirs: pkgs.dirs, npmBin: npm.bin, log: () => {}, ...opts }) });
 		} finally {
 			npm.cleanup();
 			fs.rmSync(pkgs.root, { recursive: true, force: true });
@@ -327,65 +395,99 @@ describe('publish', { skip: process.platform === 'win32' && 'fake npm is a sheba
 	}
 
 	test('publishes every platform package, then the launcher, as the new latest', () => {
-		withRegistry({ latest: '0.15.0', ours: 'sha512-ours' }, '0.16.0', ({ npm, pkgs, run }) => {
+		withRegistry({ latest: '0.15.0' }, '0.16.0', ({ pkgs, published, run }) => {
 			run({ provenance: true });
-			const pubs = publishCalls(npm.calls());
 			assert.deepEqual(
-				pubs.map((c) => path.basename(c[1])),
+				published().map((p) => p.name),
 				pkgs.names,
 			);
 			assert.equal(pkgs.names.at(-1), MAIN_PACKAGE, 'launcher last, so its optionalDependencies resolve');
-			for (const c of pubs) assert.deepEqual(c.slice(2), ['--access', 'public', '--tag', 'latest', '--provenance']);
+			for (const p of published()) assert.deepEqual(p.flags, ['--access', 'public', '--tag', 'latest', '--provenance']);
 		});
 	});
 
 	test('passes --dry-run through and omits --provenance unless asked', () => {
-		withRegistry({ ours: 'sha512-ours' }, '0.16.0', ({ npm, run }) => {
+		withRegistry({}, '0.16.0', ({ published, run }) => {
 			run({ dryRun: true });
-			for (const c of publishCalls(npm.calls())) assert.deepEqual(c.slice(2), ['--access', 'public', '--tag', 'latest', '--dry-run']);
+			assert.equal(published().length, TARGETS.length + 1);
+			for (const p of published()) assert.deepEqual(p.flags, ['--access', 'public', '--tag', 'latest', '--dry-run']);
 		});
 	});
 
 	test('publishes a prerelease under next and a backfill under backfill', () => {
-		withRegistry({ latest: '0.16.0', ours: 'x' }, '0.17.0-rc.1', ({ npm, run }) => {
+		withRegistry({ latest: '0.16.0' }, '0.17.0-rc.1', ({ published, run }) => {
 			run();
-			for (const c of publishCalls(npm.calls())) assert.equal(c[c.indexOf('--tag') + 1], 'next');
+			for (const p of published()) assert.equal(p.flags[p.flags.indexOf('--tag') + 1], 'next');
 		});
-		withRegistry({ latest: '0.16.0', ours: 'x' }, '0.14.0', ({ npm, run }) => {
+		withRegistry({ latest: '0.16.0' }, '0.14.0', ({ published, run }) => {
 			run();
-			const pubs = publishCalls(npm.calls());
-			assert.equal(pubs.length, TARGETS.length + 1);
-			for (const c of pubs) assert.equal(c[c.indexOf('--tag') + 1], 'backfill');
+			assert.equal(published().length, TARGETS.length + 1);
+			for (const p of published()) assert.equal(p.flags[p.flags.indexOf('--tag') + 1], 'backfill');
 		});
 	});
 
 	test('skips a package already published with an identical tarball (re-run recovery)', () => {
 		const version = '0.16.0';
 		const done = platformPackageName(TARGETS[0]);
-		withRegistry({ latest: '0.15.0', ours: 'sha512-ours', published: { [done]: 'sha512-ours' } }, version, ({ npm, pkgs, run }) => {
+		const state = (names) => ({ latest: '0.15.0', ours: sameIntegrity(names, 'sha512-ours'), published: { [done]: 'sha512-ours' } });
+		withRegistry(state, version, ({ pkgs, published, run }) => {
 			run();
 			assert.deepEqual(
-				publishCalls(npm.calls()).map((c) => path.basename(c[1])),
+				published().map((p) => p.name),
 				pkgs.names.filter((n) => n !== done),
 			);
 		});
 	});
 
+	const squatted = platformPackageName(TARGETS[2]);
+	const squatState = (names) => ({
+		latest: '0.15.0',
+		ours: sameIntegrity(names, 'sha512-ours'),
+		published: { [squatted]: 'sha512-theirs' },
+		publisher: 'mallory <m@example.com>',
+	});
+
 	test('refuses a package already published with DIFFERENT contents, before the launcher can pin it', () => {
-		const squatted = platformPackageName(TARGETS[2]);
-		withRegistry({ latest: '0.15.0', ours: 'sha512-ours', published: { [squatted]: 'sha512-theirs' } }, '0.16.0', ({ npm, pkgs, run }) => {
-			assert.throws(run, /already on the registry with DIFFERENT contents/);
-			const published = publishCalls(npm.calls()).map((c) => path.basename(c[1]));
-			assert.ok(!published.includes(MAIN_PACKAGE), 'launcher must not be published');
-			assert.ok(!published.includes(squatted));
-			assert.deepEqual(published, pkgs.names.slice(0, 2), 'stops at the squatted package');
+		withRegistry(squatState, '0.16.0', ({ pkgs, published, run }) => {
+			assert.throws(run, (err) => {
+				assert.match(err.message, /already on the registry with DIFFERENT contents/);
+				assert.match(err.message, /published by "mallory <m@example\.com>"/);
+				assert.match(err.message, /"sha512-theirs".*"sha512-ours"/);
+				return true;
+			});
+			assert.deepEqual(
+				published().map((p) => p.name),
+				pkgs.names.slice(0, 2),
+				'stops at the squatted package; the launcher is never published',
+			);
+		});
+	});
+
+	test('compares each package against its OWN tarball', () => {
+		// Every package but the squatted one matches: a publish() that packed the
+		// wrong dir (e.g. always dirs[0]) would compare the wrong integrity.
+		const state = (names) => ({ ...squatState(names), ours: { ...sameIntegrity(names, 'sha512-ours'), [squatted]: 'sha512-theirs' } });
+		withRegistry(state, '0.16.0', ({ pkgs, published, run }) => {
+			run();
+			assert.deepEqual(
+				published().map((p) => p.name),
+				pkgs.names.filter((n) => n !== squatted),
+			);
+		});
+	});
+
+	test('a dry run performs the same registry checks', () => {
+		withRegistry(squatState, '0.16.0', ({ npm, published, run }) => {
+			assert.throws(() => run({ dryRun: true }), /DIFFERENT contents/);
+			assert.ok(npm.calls().some((c) => c[0] === 'view' && c[1] === MAIN_PACKAGE), 'reads the launcher latest');
+			assert.equal(published().length, 2);
 		});
 	});
 
 	test('fails on a registry error that is not a 404, publishing nothing', () => {
-		withRegistry({ viewError: 'npm error code E401\nnpm error Unable to authenticate\n' }, '0.16.0', ({ npm, run }) => {
+		withRegistry({ viewError: 'npm error code E401\nnpm error Unable to authenticate' }, '0.16.0', ({ published, run }) => {
 			assert.throws(run, /E401/);
-			assert.equal(publishCalls(npm.calls()).length, 0);
+			assert.equal(published().length, 0);
 		});
 	});
 });

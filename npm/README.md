@@ -28,7 +28,7 @@ The npm package name is `agentsync.cc`; the command it installs is `agentsync`.
 ## How it works
 
 agentsync is a single Go binary. This package is a small Node launcher; the
-binary itself comes from one platform package (`agentsync.cc-<platform>-<arch>`,
+binary itself comes from one platform package (`@spxrogers/agentsync.cc-<platform>-<arch>`,
 for linux, darwin, and win32 on x64 and arm64) that your package manager picks
 as an optional dependency. No install script runs. The binaries are the same
 ones attached to the matching

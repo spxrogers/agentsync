@@ -112,8 +112,8 @@ unrelated project); the command it installs is `agentsync`.
 </Tabs>
 
 The package is a small Node launcher. The binary itself comes from a platform
-package (`agentsync.cc-<platform>-<arch>`, for linux, darwin, and win32 on x64 and
-arm64) that your package manager installs as an optional dependency. No install
+package (`@spxrogers/agentsync.cc-<platform>-<arch>`, for linux, darwin, and win32
+on x64 and arm64) that your package manager installs as an optional dependency. No install
 script runs, so `bunx` and `--ignore-scripts` work. The binaries are the ones
 attached to the matching GitHub Release, checked against its `checksums.txt`
 before packing, and published with [npm provenance](https://docs.npmjs.com/generating-provenance-statements).
