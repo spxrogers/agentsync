@@ -123,6 +123,15 @@ jobs:
         if: steps.tooling.outputs.from-tag == 'false'
         with:
           ref: ${{ github.event.repository.default_branch }}
+      # An exact version only: an alias (lts/*, latest) or a range would float,
+      # and a floating Node breaks the byte-identical re-run guarantee below.
+      - name: Check the Node pin is an exact version
+        run: |
+          pin="$(tr -d '[:space:]' < npm/.node-version)"
+          if ! [[ "$pin" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error file=npm/.node-version::Node pin '$pin' must be an exact version like 24.21.0"
+            exit 1
+          fi
       # Node is pinned exactly, in the checked-out tree (npm/.node-version), so the
       # pin travels with the tag like the rest of the tooling: npm's tarball
       # integrity hashes the gzip stream, which depends on Node's zlib, and a
@@ -132,12 +141,15 @@ jobs:
         with:
           node-version-file: npm/.node-version
           registry-url: https://registry.npmjs.org
-      - name: Check npm supports trusted publishing (>= 11.5.1)
-        if: steps.auth.outputs.mode == 'oidc'
+      # Every real publish needs npm >= 11.5.1: trusted publishing requires it,
+      # and an older npm silently ignores --provenance, so a token publish would
+      # ship without provenance instead of failing.
+      - name: Check npm supports provenance and trusted publishing (>= 11.5.1)
+        if: steps.auth.outputs.mode != 'dry-run'
         run: |
           v="$(npm --version)"
           if [ "$(printf '%s\n' 11.5.1 "$v" | sort -V | head -1)" != 11.5.1 ]; then
-            echo "::error::npm $v is too old for trusted publishing (needs >= 11.5.1); bump npm/.node-version"
+            echo "::error::npm $v is too old for provenance/trusted publishing (needs >= 11.5.1); bump npm/.node-version"
             exit 1
           fi
           echo "npm $v"

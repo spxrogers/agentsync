@@ -192,9 +192,9 @@ with the next release; re-publishing an old one never picks it up. (npm
 versions are immutable anyway.) Bump `npm/.node-version` between releases, never
 between a failed publish and its re-run.
 
-The workflow's own guard against a wrong ref is gone: it always packages the
-tag. It is not a security boundary either way, since anyone who can push to the
-repository can edit the workflow. To gate publishing on review, put the job in a
+The workflow always packages the tag, whatever ref it is run from. That is a
+guard against mistakes, not a security boundary: anyone who can push to the
+repository can edit the workflow or the tag's tooling. To gate publishing on review, put the job in a
 GitHub `environment:` restricted to `v*` tags with required reviewers, and bind
 the npm trusted publishers to that environment.
 
