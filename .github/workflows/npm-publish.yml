@@ -2,27 +2,37 @@ name: npm-publish
 # Publish a GitHub Release's binaries to npm as `agentsync.cc`, so
 # `npx agentsync.cc` / `bunx agentsync.cc` / `npm i -g agentsync.cc` work. The
 # packaging lives in npm/ (npm/build.mjs, the launcher in npm/bin/): one small
-# launcher package plus one `agentsync.cc-<platform>-<arch>` package per binary.
+# launcher package plus one `@spxrogers/agentsync.cc-<platform>-<arch>` package
+# per binary (in the maintainer's own npm scope, so nobody else can publish
+# under those names).
 #
 # Two ways in, both landing in the single `npm` job below:
 #   1. called by the `release` workflow (`workflow_call`) once GoReleaser has
 #      published the GitHub Release, so every release reaches npm.
 #   2. triggered manually ("Actions → npm-publish → Run workflow") with a tag, to
-#      publish (or finish publishing) an EXISTING release — e.g. to backfill a
-#      version cut before npm existed, or to recover a failed npm step without
-#      re-running GoReleaser.
+#      publish (or finish publishing) an EXISTING release without re-running
+#      GoReleaser. To recover a failed npm step, prefer "Re-run failed jobs" on the
+#      release run, or dispatch this from the release TAG: its npm/ tooling is
+#      what the first attempt used. Dispatch from the default branch only to
+#      backfill a version tagged before npm/ existed.
 #
 # It never rebuilds anything: it downloads the release's archives + checksums.txt
 # from the GitHub Release, and npm/build.mjs sha256-checks every archive before
 # packing its binary, so npm ships exactly the bytes the Release ships. Re-running
 # is safe: a name@version already on the registry is skipped when its tarball is
-# identical to ours, and FAILS the run when it isn't (a squatted platform-package
-# name must never be pinned by our launcher). A stable version older than the
+# identical to ours, and FAILS the run when it isn't — the launcher must never pin
+# a platform package whose bytes we didn't build. (That also fires when the
+# npm/ tooling, LICENSE, or npm README changed since the first attempt, which is
+# why recovery should use the release tag.) A stable version older than the
 # current `latest` is published under the `backfill` dist-tag, so backfilling
 # never downgrades `npx agentsync.cc`.
 #
-# Only the default branch or a release tag may publish: the checkout is the ref
-# the run started from, and its npm/ tooling (launcher included) is what ships.
+# A direct dispatch must come from the default branch or a v* tag: the checkout is
+# the ref the run started from, and its npm/ tooling (launcher included) is what
+# ships. This guards against mistakes (dispatching from a feature branch), not
+# against a repository writer, who can edit this file. When `release` calls this
+# workflow, the ref is whatever `release` ran from (e.g. a maintenance branch
+# for a patch on an old line), so the guard does not apply there.
 #
 # Auth — gated like Chocolatey: with no credential the job still builds and
 # dry-runs the packages (so the path is proven every release), then stops.
@@ -69,7 +79,8 @@ jobs:
     name: npm-publish (agentsync.cc)
     runs-on: ubuntu-latest
     steps:
-      - name: Refuse refs other than the default branch or a release tag
+      - name: Refuse direct dispatches from refs other than the default branch or a release tag
+        if: github.workflow == 'npm-publish'
         env:
           REF: ${{ github.ref }}
           DEFAULT: refs/heads/${{ github.event.repository.default_branch }}

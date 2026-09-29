@@ -13,8 +13,11 @@
 //
 // Layout (the esbuild/biome pattern — no postinstall, so bunx and
 // --ignore-scripts work):
-//   agentsync.cc                  launcher (npm/bin/agentsync.js) + optionalDependencies
-//   agentsync.cc-<platform>-<arch> one prebuilt binary each, gated by os/cpu
+//   agentsync.cc                              launcher (npm/bin/agentsync.js)
+//                                             + optionalDependencies
+//   @spxrogers/agentsync.cc-<platform>-<arch> one prebuilt binary each, os/cpu-gated
+// The platform packages live in the maintainer's npm scope so nobody else can
+// publish under their names (squatting); users only ever type `agentsync.cc`.
 //
 // --publish publishes the platform packages first, then the launcher (so its
 // optionalDependencies always resolve). A name@version already on the registry
@@ -32,6 +35,9 @@ import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 
 export const MAIN_PACKAGE = 'agentsync.cc';
+// npm scope of the platform packages: the publishing account's own scope, so the
+// names can't be registered by anyone else.
+export const PLATFORM_SCOPE = '@spxrogers';
 
 // Every GoReleaser target (.goreleaser.yaml builds: goos × goarch), mapped to
 // Node's process.platform / process.arch. A release missing any of these is
@@ -57,7 +63,7 @@ const SEMVER =
 	/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+([0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$/;
 
 export function platformPackageName(t) {
-	return `${MAIN_PACKAGE}-${t.platform}-${t.arch}`;
+	return `${PLATFORM_SCOPE}/${MAIN_PACKAGE}-${t.platform}-${t.arch}`;
 }
 
 export function archiveName(version, t) {
@@ -102,12 +108,14 @@ export function compareVersions(a, b) {
 //     on an old line) goes to `backfill` — `npm publish --tag latest` would
 //     otherwise move `latest` backwards and downgrade every `npx` user;
 //   - anything else is the new `latest`.
-// Caveat: the registry points `latest` at a package's FIRST version whatever
-// tag it was published with, so an rc as the very first publish still lands on
-// `latest` until the first stable release replaces it.
+// The registry points `latest` at a package's FIRST version whatever tag it was
+// published with, so an rc as the very first publish lands on `latest`; a
+// prerelease `latest` is therefore treated as no latest at all, and the first
+// stable version of any number replaces it.
 export function distTag(version, currentLatest) {
-	if (version.includes('-')) return 'next';
-	if (currentLatest && compareVersions(version, currentLatest) < 0) return 'backfill';
+	const isPrerelease = (v) => v.split('+')[0].includes('-');
+	if (isPrerelease(version)) return 'next';
+	if (currentLatest && !isPrerelease(currentLatest) && compareVersions(version, currentLatest) < 0) return 'backfill';
 	return 'latest';
 }
 
@@ -192,8 +200,36 @@ function extractBinary(archive, member, destFile) {
 	}
 }
 
+// writeFile writes a package file with a fixed 0644 mode: npm packs the files'
+// mode bits, so a umask-dependent mode would change the tarball's integrity and
+// make an identical re-run look like a different build.
+function writeFile(file, data) {
+	fs.writeFileSync(file, data);
+	fs.chmodSync(file, 0o644);
+}
+
 function writeJSON(file, value) {
-	fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
+	writeFile(file, `${JSON.stringify(value, null, 2)}\n`);
+}
+
+// realpathLoose resolves symlinks in the longest existing prefix of p (the rest
+// may not exist yet), so two paths can be compared for containment.
+function realpathLoose(p) {
+	const tail = [];
+	let head = path.resolve(p);
+	while (!fs.existsSync(head)) {
+		tail.unshift(path.basename(head));
+		const up = path.dirname(head);
+		if (up === head) break;
+		head = up;
+	}
+	return path.join(fs.existsSync(head) ? fs.realpathSync(head) : head, ...tail);
+}
+
+// contains reports whether `inner` is `outer` itself or somewhere beneath it.
+export function contains(outer, inner) {
+	const rel = path.relative(realpathLoose(outer), realpathLoose(inner));
+	return rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel);
 }
 
 // build assembles every package under outDir and returns their directories,
@@ -205,8 +241,7 @@ export function build({ dist, outDir, expectVersion }) {
 	outDir = path.resolve(outDir);
 	// outDir is wiped below; refuse anything that would take the release (or a
 	// parent of it) with it.
-	const rel = path.relative(outDir, dist);
-	if (rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel))) {
+	if (contains(outDir, dist)) {
 		throw new Error(`--out ${outDir} would delete --dist ${dist}; pick an output directory outside it`);
 	}
 	const files = fs.readdirSync(dist);
@@ -237,13 +272,13 @@ export function build({ dist, outDir, expectVersion }) {
 		const dir = path.join(outDir, pkg.name);
 		extractBinary(archivePath, binaryName(t), path.join(dir, 'bin', binaryName(t)));
 		writeJSON(path.join(dir, 'package.json'), pkg);
-		fs.writeFileSync(
+		writeFile(
 			path.join(dir, 'README.md'),
 			`# ${pkg.name}\n\nThe prebuilt \`${t.platform}-${t.arch}\` binary for [agentsync](https://agentsync.cc).\n` +
 				`Don't install this directly — install [\`${MAIN_PACKAGE}\`](https://www.npmjs.com/package/${MAIN_PACKAGE}), ` +
 				'which picks the right platform package for you.\n',
 		);
-		fs.writeFileSync(path.join(dir, 'LICENSE'), license);
+		writeFile(path.join(dir, 'LICENSE'), license);
 		dirs.push(dir);
 	}
 
@@ -251,8 +286,8 @@ export function build({ dist, outDir, expectVersion }) {
 	fs.mkdirSync(path.join(mainDir, 'bin'), { recursive: true });
 	fs.copyFileSync(path.join(here, 'bin', 'agentsync.js'), path.join(mainDir, 'bin', 'agentsync.js'));
 	fs.chmodSync(path.join(mainDir, 'bin', 'agentsync.js'), 0o755);
-	fs.copyFileSync(path.join(here, 'README.md'), path.join(mainDir, 'README.md'));
-	fs.writeFileSync(path.join(mainDir, 'LICENSE'), license);
+	writeFile(path.join(mainDir, 'README.md'), fs.readFileSync(path.join(here, 'README.md')));
+	writeFile(path.join(mainDir, 'LICENSE'), license);
 	writeJSON(path.join(mainDir, 'package.json'), mainPackageJSON(version));
 	dirs.push(mainDir);
 	return { version, dirs };
@@ -282,10 +317,22 @@ export function publish({ version, dirs, provenance = false, dryRun = false, npm
 		if (published !== null) {
 			const [ours] = npmJSON(npmBin, ['pack', dir, '--dry-run']) ?? [];
 			if (!ours || published !== ours.integrity) {
+				let publisher = 'unknown';
+				try {
+					publisher = npmJSON(npmBin, ['view', `${name}@${version}`, '_npmUser']) ?? publisher;
+				} catch {
+					// best effort: it only enriches the message below
+				}
+				// Registry-supplied strings are JSON-quoted so they can't inject lines
+				// (e.g. GitHub Actions `::` workflow commands) into the log.
 				throw new Error(
-					`${name}@${version} is already on the registry with DIFFERENT contents ` +
-						`(registry ${published}, ours ${ours?.integrity}). Refusing to publish a launcher that ` +
-						'would pin it: either the name was squatted, or this build differs from the one published.',
+					`${name}@${version} is already on the registry with DIFFERENT contents: ` +
+						`registry ${JSON.stringify(published)} (published by ${JSON.stringify(publisher)}), ` +
+						`ours ${JSON.stringify(ours?.integrity ?? null)}. Refusing to publish a launcher that ` +
+						'would pin it. If that publisher is not us, the name was hijacked: stop and investigate. ' +
+						'If it is us, this build differs from the one published: the npm/ tooling, LICENSE, or ' +
+						'README changed since then, or the run used a different checkout. Recover by re-running ' +
+						'the failed job, or by dispatching npm-publish from the release tag.',
 				);
 			}
 			log(`skip ${name}@${version}: already published (identical tarball)`);

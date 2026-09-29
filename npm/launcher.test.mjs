@@ -36,15 +36,17 @@ esac
 `;
 
 // installFixture lays out node_modules the way npm would after installing the
-// main package on this machine. withPlatform=false simulates --omit=optional.
-function installFixture(root, { withPlatform }) {
+// main package on this machine. withPlatform=false simulates --omit=optional;
+// supported=false makes the launcher list only a platform this machine isn't.
+function installFixture(root, { withPlatform, supported = true }) {
 	const mainDir = path.join(root, 'node_modules', MAIN);
 	fs.mkdirSync(path.join(mainDir, 'bin'), { recursive: true });
 	fs.copyFileSync(launcherSrc, path.join(mainDir, 'bin', 'agentsync.js'));
-	const plat = `${MAIN}-${process.platform}-${process.arch}`;
+	const plat = `@spxrogers/${MAIN}-${process.platform}-${process.arch}`;
+	const listed = supported ? plat : `@spxrogers/${MAIN}-plan9-mips`;
 	fs.writeFileSync(
 		path.join(mainDir, 'package.json'),
-		JSON.stringify({ name: MAIN, version: VERSION, optionalDependencies: { [plat]: VERSION } }),
+		JSON.stringify({ name: MAIN, version: VERSION, optionalDependencies: { [listed]: VERSION } }),
 	);
 	if (withPlatform) {
 		const platDir = path.join(root, 'node_modules', plat);
@@ -56,9 +58,17 @@ function installFixture(root, { withPlatform }) {
 }
 
 describe('platformPackage', () => {
-	const main = { name: MAIN, optionalDependencies: { [`${MAIN}-linux-x64`]: VERSION } };
-	test('names a published platform', () => {
-		assert.equal(platformPackage(main, 'linux', 'x64'), `${MAIN}-linux-x64`);
+	const main = {
+		name: MAIN,
+		optionalDependencies: { [`@spxrogers/${MAIN}-linux-x64`]: VERSION, [`${MAIN}-darwin-arm64`]: VERSION },
+	};
+	test('names a published platform, scoped or not', () => {
+		assert.equal(platformPackage(main, 'linux', 'x64'), `@spxrogers/${MAIN}-linux-x64`);
+		assert.equal(platformPackage(main, 'darwin', 'arm64'), `${MAIN}-darwin-arm64`);
+	});
+	test('never matches another package name that merely ends the same way', () => {
+		const other = { name: MAIN, optionalDependencies: { [`not-${MAIN}-linux-x64`]: VERSION } };
+		assert.equal(platformPackage(other, 'linux', 'x64'), null);
 	});
 	test('returns null for an unpublished platform', () => {
 		assert.equal(platformPackage(main, 'linux', 'riscv64'), null);
@@ -104,6 +114,13 @@ describe('launcher', { skip: !posix && 'fake binary is a POSIX shell script' }, 
 		});
 	}
 
+	test('exits 128+n for a signal Node handles itself (SIGUSR1)', () => {
+		const r = run(['selfkill', 'USR1']);
+		assert.equal(r.signal, null);
+		assert.equal(r.status, 128 + os.constants.signals.SIGUSR1);
+		assert.doesNotMatch(r.stderr, /Debugger listening/);
+	});
+
 	test('exits 128+n for a signal Node cannot re-raise on itself (SIGPIPE)', () => {
 		const r = run(['selfkill', 'PIPE']);
 		assert.equal(r.signal, null);
@@ -139,7 +156,7 @@ describe('launcher', { skip: !posix && 'fake binary is a POSIX shell script' }, 
 	}
 
 	test('restores a lost exec bit once', () => {
-		const bin = path.join(root, 'node_modules', `${MAIN}-${process.platform}-${process.arch}`, 'bin', 'agentsync');
+		const bin = path.join(root, 'node_modules', '@spxrogers', `${MAIN}-${process.platform}-${process.arch}`, 'bin', 'agentsync');
 		fs.chmodSync(bin, 0o644);
 		const r = run(['echo', 'ok']);
 		assert.equal(r.status, 0, r.stderr);
@@ -157,6 +174,19 @@ describe('launcher without its platform package', () => {
 			assert.equal(r.status, 1);
 			assert.match(r.stderr, new RegExp(`${MAIN}-${process.platform}-${process.arch}@${VERSION} is not installed`));
 			assert.match(r.stderr, /--omit=optional/);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	test('names the supported platforms when this one has no package', () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agentsync-launcher-'));
+		try {
+			const launcher = installFixture(root, { withPlatform: false, supported: false });
+			const r = spawnSync(process.execPath, [launcher, '--version'], { encoding: 'utf8', timeout: 20000 });
+			assert.equal(r.status, 1);
+			assert.match(r.stderr, new RegExp(`no prebuilt binary for ${process.platform}-${process.arch}`));
+			assert.match(r.stderr, /Supported: plan9-mips\./);
 		} finally {
 			fs.rmSync(root, { recursive: true, force: true });
 		}

@@ -167,29 +167,40 @@ only publishing failed, re-run GoReleaser against the existing tag
 The release's `npm` job calls `.github/workflows/npm-publish.yml`, which
 downloads the new Release's archives and `checksums.txt`, and runs
 `npm/build.mjs`. That script verifies each archive and publishes seven packages:
-one `agentsync.cc-<platform>-<arch>` package per binary, then the
-`agentsync.cc` launcher. A name@version already on the registry is skipped if
-its tarball is identical to ours, so re-running the job (or dispatching
-**npm-publish** for the tag, from the default branch) is how you recover a
-failed npm step. It never re-runs GoReleaser. If the registry copy *differs*,
-the run fails before the launcher is published: that means a squatted name, or a
-build that changed since the first publish. A stable version older than the
-current `latest` goes to the `backfill` dist-tag, so backfilling an old release
-never downgrades `npx agentsync.cc`. CI builds the packages from every
-goreleaser snapshot and installs them through npx and bunx (`npm/smoke.sh`);
-`node --test npm/*.test.mjs` runs the unit tests. `just ci` runs both, so it
-needs Node (and optionally Bun) alongside Go.
+one `@spxrogers/agentsync.cc-<platform>-<arch>` package per binary, then the
+`agentsync.cc` launcher. The platform packages live in the maintainer's npm
+scope so nobody else can publish under their names; users only type
+`agentsync.cc`.
+
+A name@version already on the registry is skipped if its tarball is identical to
+ours, so **re-running the failed job** (or dispatching **npm-publish** from the
+release *tag*) is how you recover a failed npm step. It never re-runs
+GoReleaser. If the registry copy *differs*, the run fails before the launcher is
+published, and the error names who published it. If that's you, the npm/
+tooling, `LICENSE`, or the npm README changed since the first attempt (for
+example, a dispatch from the default branch instead of the tag). If it isn't,
+stop and investigate. Dispatch from the default branch only to backfill a
+version tagged before `npm/` existed. A stable version older than the current
+`latest` goes to the `backfill` dist-tag, so backfilling never downgrades
+`npx agentsync.cc`.
+
+CI builds the packages from every goreleaser snapshot and installs them through
+npx and bunx (`npm/smoke.sh`); `node --test npm/*.test.mjs` runs the unit tests.
+`just ci` runs both, so it needs Node (and optionally Bun) alongside Go.
 
 Publishing is gated on a credential, like Chocolatey. With none configured the
 job builds and dry-runs the packages, then stops. To go live:
 
 1. **Bootstrap with a token.** npm only allows trusted publishing on packages
-   that already exist. Create a granular npm access token with publish rights
-   and save it as the `NPM_TOKEN` repository secret. Then run **npm-publish**
-   for the latest tag to create all seven packages. Do this promptly: the six
-   `agentsync.cc-*` platform names are unscoped, so until they exist anyone can
-   register one (the publish would then fail safely, as above, rather than ship
-   their binary).
+   that already exist. Create a granular npm access token for the account that
+   owns the `@spxrogers` scope, with **read and write** on **all packages**
+   (the seven names don't exist yet, so they can't be selected individually)
+   and **Bypass two-factor authentication** checked, since CI can't enter a
+   one-time password.
+   Save it as the `NPM_TOKEN` repository secret, then run **npm-publish** for
+   the latest tag to create all seven packages. Nobody else can register the
+   scoped platform names, but `agentsync.cc` itself is unscoped, so publish it
+   promptly.
 2. **Switch to trusted publishing (no stored secret).** On npmjs.com, add a
    GitHub Actions trusted publisher to each of the seven packages, for this
    repository with workflow `release.yml` **and** again with workflow
