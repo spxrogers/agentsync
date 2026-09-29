@@ -28,6 +28,7 @@ case "$1" in
   cat) cat ;;
   exit) exit "$2" ;;
   selfkill) kill -"$2" $$ ;;
+  sleep) exec sleep 30 ;;
   wait) trap "echo got-$2; kill \\$pid 2>/dev/null; exit 42" "$2"
         sleep 30 & pid=$!
         echo ready
@@ -37,8 +38,9 @@ esac
 
 // installFixture lays out node_modules the way npm would after installing the
 // main package on this machine. withPlatform=false simulates --omit=optional;
-// supported=false makes the launcher list only a platform this machine isn't.
-function installFixture(root, { withPlatform, supported = true }) {
+// supported=false makes the launcher list only a platform this machine isn't;
+// platformVersion installs a platform package at a different version.
+function installFixture(root, { withPlatform, supported = true, platformVersion = VERSION }) {
 	const mainDir = path.join(root, 'node_modules', MAIN);
 	fs.mkdirSync(path.join(mainDir, 'bin'), { recursive: true });
 	fs.copyFileSync(launcherSrc, path.join(mainDir, 'bin', 'agentsync.js'));
@@ -51,7 +53,7 @@ function installFixture(root, { withPlatform, supported = true }) {
 	if (withPlatform) {
 		const platDir = path.join(root, 'node_modules', plat);
 		fs.mkdirSync(path.join(platDir, 'bin'), { recursive: true });
-		fs.writeFileSync(path.join(platDir, 'package.json'), JSON.stringify({ name: plat, version: VERSION }));
+		fs.writeFileSync(path.join(platDir, 'package.json'), JSON.stringify({ name: plat, version: platformVersion }));
 		fs.writeFileSync(path.join(platDir, 'bin', 'agentsync'), FAKE_BIN, { mode: 0o755 });
 	}
 	return path.join(mainDir, 'bin', 'agentsync.js');
@@ -155,6 +157,79 @@ describe('launcher', { skip: !posix && 'fake binary is a POSIX shell script' }, 
 		});
 	}
 
+	// preload arms a --require hook that wraps child_process.spawn: on the Nth
+	// spawn it records the child's pid and immediately SIGTERMs the launcher —
+	// the tightest window there is between starting the binary and the launcher
+	// being ready to forward. Test-only; the launcher knows nothing of it.
+	function preload(dir) {
+		const file = path.join(dir, 'preload.cjs');
+		fs.writeFileSync(
+			file,
+			`const cp = require('node:child_process');
+const fs = require('node:fs');
+const real = cp.spawn;
+let n = 0;
+cp.spawn = function (...args) {
+	const child = real.apply(this, args);
+	if (++n === Number(process.env.PRELOAD_SIGNAL_ON_SPAWN)) {
+		fs.writeFileSync(process.env.PRELOAD_PIDFILE, String(child.pid ?? ''));
+		process.kill(process.pid, 'SIGTERM');
+	}
+	return child;
+};
+`,
+		);
+		return file;
+	}
+
+	const alive = (pid) => {
+		try {
+			process.kill(pid, 0);
+			return true;
+		} catch {
+			return false;
+		}
+	};
+
+	test('a signal right after spawn() is forwarded, never orphaning the binary', async () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentsync-preload-'));
+		const pidfile = path.join(dir, 'pid');
+		let pid;
+		try {
+			const r = spawnSync(process.execPath, ['--require', preload(dir), launcher, 'sleep'], {
+				encoding: 'utf8',
+				timeout: 20000,
+				env: { ...process.env, PRELOAD_SIGNAL_ON_SPAWN: '1', PRELOAD_PIDFILE: pidfile },
+			});
+			pid = Number(fs.readFileSync(pidfile, 'utf8'));
+			assert.ok(pid > 0, 'the binary was spawned');
+			assert.equal(r.signal, 'SIGTERM', 'the launcher mirrors the forwarded SIGTERM');
+			for (let i = 0; i < 50 && alive(pid); i++) await new Promise((res) => setTimeout(res, 20));
+			assert.ok(!alive(pid), 'the binary must not outlive the launcher');
+		} finally {
+			if (pid > 0 && alive(pid)) process.kill(pid, 'SIGKILL');
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	test('a signal during the exec-bit retry reaches the retried binary', () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentsync-preload-'));
+		const bin = path.join(root, 'node_modules', '@spxrogers', `${MAIN}-${process.platform}-${process.arch}`, 'bin', 'agentsync');
+		try {
+			fs.chmodSync(bin, 0o644); // first spawn fails with EACCES; the signal lands then
+			const r = spawnSync(process.execPath, ['--require', preload(dir), launcher, 'sleep'], {
+				encoding: 'utf8',
+				timeout: 15000,
+				env: { ...process.env, PRELOAD_SIGNAL_ON_SPAWN: '1', PRELOAD_PIDFILE: path.join(dir, 'pid') },
+			});
+			assert.equal(r.error, undefined, 'the retried binary ignored the signal and ran on');
+			assert.equal(r.signal, 'SIGTERM', `stderr=${r.stderr}`);
+		} finally {
+			fs.chmodSync(bin, 0o755);
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	test('restores a lost exec bit once', () => {
 		const bin = path.join(root, 'node_modules', '@spxrogers', `${MAIN}-${process.platform}-${process.arch}`, 'bin', 'agentsync');
 		fs.chmodSync(bin, 0o644);
@@ -165,7 +240,7 @@ describe('launcher', { skip: !posix && 'fake binary is a POSIX shell script' }, 
 	});
 });
 
-describe('launcher without its platform package', () => {
+describe('launcher refusing to run', () => {
 	test('explains the missing optional dependency and exits 1', () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agentsync-launcher-'));
 		try {
@@ -174,6 +249,19 @@ describe('launcher without its platform package', () => {
 			assert.equal(r.status, 1);
 			assert.match(r.stderr, new RegExp(`${MAIN}-${process.platform}-${process.arch}@${VERSION} is not installed`));
 			assert.match(r.stderr, /--omit=optional/);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	test('refuses a platform package at a different version', () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agentsync-launcher-'));
+		try {
+			const launcher = installFixture(root, { withPlatform: true, platformVersion: '9.9.9' });
+			const r = spawnSync(process.execPath, [launcher, 'echo', 'ran'], { encoding: 'utf8', timeout: 20000 });
+			assert.equal(r.status, 1);
+			assert.equal(r.stdout, '', 'the mismatched binary must not run');
+			assert.match(r.stderr, new RegExp(`found @spxrogers/${MAIN}-${process.platform}-${process.arch}@9\\.9\\.9, but this is ${MAIN}@${VERSION.replaceAll('.', '\\.')}`));
 		} finally {
 			fs.rmSync(root, { recursive: true, force: true });
 		}

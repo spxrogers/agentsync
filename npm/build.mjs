@@ -223,7 +223,9 @@ function realpathLoose(p) {
 		if (up === head) break;
 		head = up;
 	}
-	return path.join(fs.existsSync(head) ? fs.realpathSync(head) : head, ...tail);
+	// .native also canonicalizes letter case on case-insensitive filesystems
+	// (macOS), so `--out Release` can't slip past `--dist release`.
+	return path.join(fs.existsSync(head) ? fs.realpathSync.native(head) : head, ...tail);
 }
 
 // contains reports whether `inner` is `outer` itself or somewhere beneath it.
@@ -239,10 +241,17 @@ export function build({ dist, outDir, expectVersion }) {
 	const repoRoot = path.resolve(here, '..');
 	dist = path.resolve(dist);
 	outDir = path.resolve(outDir);
-	// outDir is wiped below; refuse anything that would take the release (or a
-	// parent of it) with it.
-	if (contains(outDir, dist)) {
-		throw new Error(`--out ${outDir} would delete --dist ${dist}; pick an output directory outside it`);
+	// outDir is wiped below; refuse anything that would take the release, the
+	// checkout, the working directory, or the home directory with it.
+	for (const [what, p] of [
+		['--dist', dist],
+		['the repository', repoRoot],
+		['the working directory', process.cwd()],
+		['the home directory', os.homedir()],
+	]) {
+		if (contains(outDir, p)) {
+			throw new Error(`--out ${outDir} would delete ${what} (${p}); pick a dedicated output directory`);
+		}
 	}
 	const files = fs.readdirSync(dist);
 	const version = inferVersion(files);
@@ -331,8 +340,9 @@ export function publish({ version, dirs, provenance = false, dryRun = false, npm
 						`ours ${JSON.stringify(ours?.integrity ?? null)}. Refusing to publish a launcher that ` +
 						'would pin it. If that publisher is not us, the name was hijacked: stop and investigate. ' +
 						'If it is us, this build differs from the one published: the npm/ tooling, LICENSE, or ' +
-						'README changed since then, or the run used a different checkout. Recover by re-running ' +
-						'the failed job, or by dispatching npm-publish from the release tag.',
+						'README changed since then (a backfill of a pre-npm tag uses the default branch), or the ' +
+						'Node/npm version that packed it did (npm-publish.yml pins one). Recover by re-running the ' +
+						'failed job or dispatching npm-publish for the tag; failing that, cut a patch release.',
 				);
 			}
 			log(`skip ${name}@${version}: already published (identical tarball)`);

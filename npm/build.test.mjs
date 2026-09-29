@@ -19,7 +19,6 @@ import {
 	TARGETS,
 	archiveName,
 	binaryName,
-	PLATFORM_SCOPE,
 	build,
 	compareVersions,
 	contains,
@@ -61,7 +60,7 @@ describe('targets', () => {
 
 	test('platform packages live in the maintainer scope', () => {
 		for (const t of TARGETS) {
-			assert.ok(platformPackageName(t).startsWith(`${PLATFORM_SCOPE}/${MAIN_PACKAGE}-`), platformPackageName(t));
+			assert.ok(platformPackageName(t).startsWith('@spxrogers/agentsync.cc-'), platformPackageName(t));
 		}
 	});
 });
@@ -247,6 +246,9 @@ describe('build', { skip: !haveTools && 'needs zip and tar' }, () => {
 			assert.deepEqual(fs.readFileSync(path.join(mainDir, 'README.md')), fs.readFileSync(path.join(here, 'README.md')));
 			assert.deepEqual(fs.readFileSync(path.join(mainDir, 'bin', 'agentsync.js')), fs.readFileSync(path.join(here, 'bin', 'agentsync.js')));
 			assert.equal(fs.statSync(path.join(mainDir, 'bin', 'agentsync.js')).mode & 0o777, 0o755);
+			for (const f of ['LICENSE', 'README.md', 'package.json']) {
+				assert.equal(fs.statSync(path.join(mainDir, f)).mode & 0o777, 0o644, `launcher ${f}: umask must not leak into the tarball`);
+			}
 		});
 	});
 
@@ -262,9 +264,9 @@ describe('build', { skip: !haveTools && 'needs zip and tar' }, () => {
 			},
 			/no entry for agentsync_2\.0\.0_darwin_arm64/,
 		],
-		['a symlinked binary member (tar)', { broken: { linux: 'symlink' } }, () => {}, /is not a regular non-empty file/],
-		['a symlinked binary member (zip)', { broken: { windows: 'symlink' } }, () => {}, /is not a regular non-empty file/],
-		['an empty binary member', { broken: { darwin: 'empty' } }, () => {}, /is not a regular non-empty file/],
+		['a symlinked binary member (tar)', { broken: { linux: 'symlink' } }, () => {}, /agentsync_2\.0\.0_linux_amd64\.tar\.gz: agentsync is not a regular non-empty file/],
+		['a symlinked binary member (zip)', { broken: { windows: 'symlink' } }, () => {}, /agentsync_2\.0\.0_windows_amd64\.zip: agentsync\.exe is not a regular non-empty file/],
+		['an empty binary member', { broken: { darwin: 'empty' } }, () => {}, /agentsync_2\.0\.0_darwin_amd64\.tar\.gz: agentsync is not a regular non-empty file/],
 	];
 	for (const [what, opts, tamper, err] of refusals) {
 		test(`refuses ${what}`, () => {
@@ -292,6 +294,29 @@ describe('build', { skip: !haveTools && 'needs zip and tar' }, () => {
 			assert.throws(() => build({ dist, outDir: dist }), /would delete --dist/);
 			assert.throws(() => build({ dist, outDir: root }), /would delete --dist/);
 			assert.ok(fs.existsSync(path.join(dist, 'checksums.txt')), 'the release survived');
+		});
+	});
+
+	// Both cases stay inside the release's private root: a regressed guard wipes
+	// only that. (The repository-root case is deliberately not exercised with a
+	// real path — a regression there would delete the checkout.)
+	test('refuses an --out that would delete the working or home directory', () => {
+		withRelease('2.0.0', {}, ({ root, dist }) => {
+			const inside = path.join(root, 'inside');
+			fs.mkdirSync(inside);
+			const cwd = process.cwd();
+			const home = process.env.HOME;
+			try {
+				process.chdir(inside);
+				assert.throws(() => build({ dist, outDir: path.join(root, 'x', '..', 'inside') }), /would delete the working directory/);
+				process.chdir(cwd);
+				process.env.HOME = inside;
+				assert.throws(() => build({ dist, outDir: inside }), /would delete the home directory/);
+			} finally {
+				process.chdir(cwd);
+				process.env.HOME = home;
+			}
+			assert.ok(fs.existsSync(inside), 'nothing was deleted');
 		});
 	});
 });
@@ -444,14 +469,15 @@ describe('publish', { skip: process.platform === 'win32' && 'fake npm is a sheba
 		latest: '0.15.0',
 		ours: sameIntegrity(names, 'sha512-ours'),
 		published: { [squatted]: 'sha512-theirs' },
-		publisher: 'mallory <m@example.com>',
+		publisher: 'mallory <m@example.com>\n::error::injected',
 	});
 
 	test('refuses a package already published with DIFFERENT contents, before the launcher can pin it', () => {
 		withRegistry(squatState, '0.16.0', ({ pkgs, published, run }) => {
 			assert.throws(run, (err) => {
 				assert.match(err.message, /already on the registry with DIFFERENT contents/);
-				assert.match(err.message, /published by "mallory <m@example\.com>"/);
+				assert.match(err.message, /published by "mallory <m@example\.com>\\n::error::injected"/);
+				assert.ok(!/[\r\n]/.test(err.message), 'registry strings must not inject lines into the log');
 				assert.match(err.message, /"sha512-theirs".*"sha512-ours"/);
 				return true;
 			});
