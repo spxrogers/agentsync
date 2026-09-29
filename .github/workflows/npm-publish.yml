@@ -15,7 +15,14 @@ name: npm-publish
 # It never rebuilds anything: it downloads the release's archives + checksums.txt
 # from the GitHub Release, and npm/build.mjs sha256-checks every archive before
 # packing its binary, so npm ships exactly the bytes the Release ships. Re-running
-# is safe: name@version pairs already on the registry are skipped.
+# is safe: a name@version already on the registry is skipped when its tarball is
+# identical to ours, and FAILS the run when it isn't (a squatted platform-package
+# name must never be pinned by our launcher). A stable version older than the
+# current `latest` is published under the `backfill` dist-tag, so backfilling
+# never downgrades `npx agentsync.cc`.
+#
+# Only the default branch or a release tag may publish: the checkout is the ref
+# the run started from, and its npm/ tooling (launcher included) is what ships.
 #
 # Auth — gated like Chocolatey: with no credential the job still builds and
 # dry-runs the packages (so the path is proven every release), then stops.
@@ -39,6 +46,11 @@ on:
         description: "Release tag to publish to npm"
         required: true
         type: string
+    # Declared (not `secrets: inherit`) so the caller hands over this one secret
+    # and nothing else. Optional: without it the job dry-runs or uses OIDC.
+    secrets:
+      NPM_TOKEN:
+        required: false
 
 # contents:read to download the Release assets; id-token:write for provenance and
 # trusted publishing. A caller must grant both (release.yml's `npm` job does).
@@ -57,6 +69,15 @@ jobs:
     name: npm-publish (agentsync.cc)
     runs-on: ubuntu-latest
     steps:
+      - name: Refuse refs other than the default branch or a release tag
+        env:
+          REF: ${{ github.ref }}
+          DEFAULT: refs/heads/${{ github.event.repository.default_branch }}
+        run: |
+          case "$REF" in
+            "$DEFAULT" | refs/tags/v*) echo "publishing from $REF" ;;
+            *) echo "::error::npm-publish runs only from $DEFAULT or a v* tag (got $REF): the checked-out npm/ tooling is what gets published"; exit 1 ;;
+          esac
       - name: Detect npm credential
         id: auth
         shell: bash
@@ -78,9 +99,15 @@ jobs:
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
-      - name: Ensure npm supports trusted publishing
+      - name: Check npm supports trusted publishing (>= 11.5.1)
         if: steps.auth.outputs.mode == 'oidc'
-        run: npm install -g 'npm@^11.5.1' && npm --version
+        run: |
+          v="$(npm --version)"
+          if [ "$(printf '%s\n' 11.5.1 "$v" | sort -V | head -1)" != 11.5.1 ]; then
+            echo "::error::npm $v is too old for trusted publishing (needs >= 11.5.1); bump setup-node's node-version"
+            exit 1
+          fi
+          echo "npm $v"
       - name: Download the release's archives
         env:
           GH_TOKEN: ${{ github.token }}
@@ -106,5 +133,5 @@ jobs:
           set -euo pipefail
           mode=(--provenance)
           if [ "$MODE" = "dry-run" ]; then mode=(--dry-run); fi
-          node npm/build.mjs --dist release --out npm-dist --version "${TAG#v}" \
+          node npm/build.mjs --dist release --out npm-dist --expect-version "${TAG#v}" \
             --publish "${mode[@]}"

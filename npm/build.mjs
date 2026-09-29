@@ -2,7 +2,7 @@
 // Build (and optionally publish) the agentsync npm packages from a GoReleaser
 // release — the thing that makes `npx agentsync.cc` / `bunx agentsync.cc` work.
 //
-//   node npm/build.mjs --dist <dir> [--out <dir>] [--version X.Y.Z]
+//   node npm/build.mjs --dist <dir> [--out <dir>] [--expect-version X.Y.Z]
 //                      [--publish [--provenance] [--dry-run]]
 //
 // <dir> holds the release's archives (agentsync_<ver>_<os>_<arch>.tar.gz|.zip)
@@ -17,15 +17,18 @@
 //   agentsync.cc-<platform>-<arch> one prebuilt binary each, gated by os/cpu
 //
 // --publish publishes the platform packages first, then the launcher (so its
-// optionalDependencies always resolve), and skips any name@version already on
-// the registry — so re-running a half-finished publish is the recovery path,
-// matching the rest of the release pipeline.
+// optionalDependencies always resolve). A name@version already on the registry
+// is skipped ONLY if its tarball is byte-identical to ours (same sha512
+// integrity) — so re-running a half-finished publish is the recovery path,
+// matching the rest of the release pipeline, while a version someone else put
+// there (a squatted platform-package name) fails the publish instead of being
+// silently pinned by our launcher.
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 
 export const MAIN_PACKAGE = 'agentsync.cc';
@@ -65,10 +68,47 @@ export function binaryName(t) {
 	return t.goos === 'windows' ? 'agentsync.exe' : 'agentsync';
 }
 
-// distTag keeps prereleases (v1.2.3-rc.1, snapshots) off `latest`, so a plain
-// `npx agentsync.cc` never picks one up.
-export function distTag(version) {
-	return version.includes('-') ? 'next' : 'latest';
+// compareVersions orders two semver strings by precedence (build metadata
+// ignored; a prerelease sorts below its release; prerelease identifiers compare
+// numerically when both are numeric, else lexically — semver.org §11).
+export function compareVersions(a, b) {
+	const parse = (v) => {
+		const [core, pre] = v.split('+')[0].split(/-(.*)/s);
+		return { core: core.split('.').map(Number), pre: pre === undefined ? [] : pre.split('.') };
+	};
+	const x = parse(a);
+	const y = parse(b);
+	for (let i = 0; i < 3; i++) if (x.core[i] !== y.core[i]) return x.core[i] < y.core[i] ? -1 : 1;
+	if (!x.pre.length || !y.pre.length) return x.pre.length === y.pre.length ? 0 : x.pre.length ? -1 : 1;
+	for (let i = 0; i < Math.max(x.pre.length, y.pre.length); i++) {
+		const p = x.pre[i];
+		const q = y.pre[i];
+		if (p === undefined || q === undefined) return p === undefined ? -1 : 1;
+		if (p === q) continue;
+		const pn = /^\d+$/.test(p);
+		const qn = /^\d+$/.test(q);
+		if (pn && qn) return Number(p) < Number(q) ? -1 : 1;
+		if (pn !== qn) return pn ? -1 : 1;
+		return p < q ? -1 : 1;
+	}
+	return 0;
+}
+
+// distTag picks the dist-tag every package of this version is published under,
+// given the launcher's current `latest` (null if it has none yet):
+//   - prereleases (v1.2.3-rc.1, snapshots) go to `next`, never `latest`, so a
+//     plain `npx agentsync.cc` doesn't pick one up;
+//   - a stable version OLDER than the current `latest` (a backfill, or a patch
+//     on an old line) goes to `backfill` — `npm publish --tag latest` would
+//     otherwise move `latest` backwards and downgrade every `npx` user;
+//   - anything else is the new `latest`.
+// Caveat: the registry points `latest` at a package's FIRST version whatever
+// tag it was published with, so an rc as the very first publish still lands on
+// `latest` until the first stable release replaces it.
+export function distTag(version, currentLatest) {
+	if (version.includes('-')) return 'next';
+	if (currentLatest && compareVersions(version, currentLatest) < 0) return 'backfill';
+	return 'latest';
 }
 
 export function platformPackageJSON(version, t) {
@@ -136,8 +176,16 @@ function extractBinary(archive, member, destFile) {
 		} else {
 			execFileSync('tar', ['-xzf', archive, '-C', tmp, member], { stdio: 'inherit' });
 		}
+		// A release archive's `agentsync` must be a real, non-empty file: never
+		// follow a symlink member (it would pack whatever file it points at on
+		// this runner).
+		const extracted = path.join(tmp, member);
+		const st = fs.lstatSync(extracted);
+		if (!st.isFile() || st.size === 0) {
+			throw new Error(`${path.basename(archive)}: ${member} is not a regular non-empty file`);
+		}
 		fs.mkdirSync(path.dirname(destFile), { recursive: true });
-		fs.copyFileSync(path.join(tmp, member), destFile);
+		fs.copyFileSync(extracted, destFile);
 		fs.chmodSync(destFile, 0o755);
 	} finally {
 		fs.rmSync(tmp, { recursive: true, force: true });
@@ -150,15 +198,22 @@ function writeJSON(file, value) {
 
 // build assembles every package under outDir and returns their directories,
 // platform packages first (publish order).
-export function build({ dist, outDir, version }) {
+export function build({ dist, outDir, expectVersion }) {
 	const here = path.dirname(fileURLToPath(import.meta.url));
 	const repoRoot = path.resolve(here, '..');
-	const files = fs.readdirSync(dist);
-	const inferred = inferVersion(files);
-	if (version && version !== inferred) {
-		throw new Error(`--version ${version} does not match the archives in ${dist} (${inferred})`);
+	dist = path.resolve(dist);
+	outDir = path.resolve(outDir);
+	// outDir is wiped below; refuse anything that would take the release (or a
+	// parent of it) with it.
+	const rel = path.relative(outDir, dist);
+	if (rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel))) {
+		throw new Error(`--out ${outDir} would delete --dist ${dist}; pick an output directory outside it`);
 	}
-	version = inferred;
+	const files = fs.readdirSync(dist);
+	const version = inferVersion(files);
+	if (expectVersion && expectVersion !== version) {
+		throw new Error(`--expect-version ${expectVersion} does not match the archives in ${dist} (${version})`);
+	}
 	if (!SEMVER.test(version)) throw new Error(`version ${version} is not valid semver`);
 
 	const sumsFile = path.join(dist, 'checksums.txt');
@@ -203,34 +258,44 @@ export function build({ dist, outDir, version }) {
 	return { version, dirs };
 }
 
-function alreadyPublished(name, version) {
+// npmJSON runs `npm <args> --json` and returns the parsed stdout, or null when
+// npm reports E404 (the package, or that version of it, isn't on the registry).
+// Any other failure (auth, network) throws: never guess about the registry.
+function npmJSON(npmBin, args) {
 	try {
-		const out = execFileSync('npm', ['view', `${name}@${version}`, 'version'], {
-			encoding: 'utf8',
-			stdio: ['ignore', 'pipe', 'pipe'],
-		});
-		return out.trim() === version;
+		const out = execFileSync(npmBin, [...args, '--json'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+		return out.trim() === '' ? null : JSON.parse(out);
 	} catch (err) {
-		// E404 = the package (or this version) doesn't exist yet. Anything else
-		// (auth, network) is a real failure: don't guess.
-		if (/E404|404 Not Found/.test(`${err.stderr}`)) return false;
-		throw new Error(`npm view ${name}@${version} failed: ${err.stderr || err.message}`);
+		if (/\bE404\b/.test(`${err.stderr}${err.stdout}`)) return null;
+		throw new Error(`npm ${args.join(' ')} failed: ${err.stderr || err.message}`);
 	}
 }
 
-export function publish({ version, dirs, provenance, dryRun }) {
-	const tag = distTag(version);
+// publish pushes the built packages in order (platform packages, then the
+// launcher). npmBin is injectable for tests; production uses the npm on PATH.
+export function publish({ version, dirs, provenance = false, dryRun = false, npmBin = 'npm', log = console.log }) {
+	const tag = distTag(version, npmJSON(npmBin, ['view', MAIN_PACKAGE, 'dist-tags.latest']));
+	log(`publishing ${MAIN_PACKAGE}@${version} under dist-tag ${tag}${dryRun ? ' (dry run)' : ''}`);
 	for (const dir of dirs) {
 		const { name } = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8'));
-		if (!dryRun && alreadyPublished(name, version)) {
-			console.log(`skip ${name}@${version}: already published`);
+		const published = npmJSON(npmBin, ['view', `${name}@${version}`, 'dist.integrity']);
+		if (published !== null) {
+			const [ours] = npmJSON(npmBin, ['pack', dir, '--dry-run']) ?? [];
+			if (!ours || published !== ours.integrity) {
+				throw new Error(
+					`${name}@${version} is already on the registry with DIFFERENT contents ` +
+						`(registry ${published}, ours ${ours?.integrity}). Refusing to publish a launcher that ` +
+						'would pin it: either the name was squatted, or this build differs from the one published.',
+				);
+			}
+			log(`skip ${name}@${version}: already published (identical tarball)`);
 			continue;
 		}
 		const args = ['publish', dir, '--access', 'public', '--tag', tag];
 		if (provenance) args.push('--provenance');
 		if (dryRun) args.push('--dry-run');
-		console.log(`npm ${args.join(' ')}`);
-		execFileSync('npm', args, { stdio: 'inherit' });
+		log(`npm ${args.join(' ')}`);
+		execFileSync(npmBin, args, { stdio: 'inherit' });
 	}
 }
 
@@ -239,25 +304,30 @@ function main() {
 		options: {
 			dist: { type: 'string' },
 			out: { type: 'string' },
-			version: { type: 'string' },
+			'expect-version': { type: 'string' },
 			publish: { type: 'boolean', default: false },
 			provenance: { type: 'boolean', default: false },
 			'dry-run': { type: 'boolean', default: false },
 		},
 	});
-	if (!values.dist) {
-		console.error('usage: node npm/build.mjs --dist <dir> [--out <dir>] [--version X.Y.Z] [--publish [--provenance] [--dry-run]]');
+	const usage =
+		'usage: node npm/build.mjs --dist <dir> [--out <dir>] [--expect-version X.Y.Z] [--publish [--provenance] [--dry-run]]';
+	if (!values.dist || ((values.provenance || values['dry-run']) && !values.publish)) {
+		console.error(usage);
 		process.exit(2);
 	}
 	const outDir = path.resolve(values.out ?? path.join(values.dist, 'npm'));
-	const { version, dirs } = build({ dist: path.resolve(values.dist), outDir, version: values.version });
-	console.log(`built ${dirs.length} packages for ${MAIN_PACKAGE}@${version} (dist-tag ${distTag(version)}) in ${outDir}`);
+	const { version, dirs } = build({ dist: values.dist, outDir, expectVersion: values['expect-version'] });
+	console.log(`built ${dirs.length} packages for ${MAIN_PACKAGE}@${version} in ${outDir}`);
 	if (values.publish) {
 		publish({ version, dirs, provenance: values.provenance, dryRun: values['dry-run'] });
 	}
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
+// Run main() only when executed directly (not when imported by the tests).
+// realpath both sides so a symlinked checkout or invocation path still matches.
+const invoked = process.argv[1] && fs.existsSync(process.argv[1]) ? fs.realpathSync(process.argv[1]) : null;
+if (invoked && invoked === fs.realpathSync(fileURLToPath(import.meta.url))) {
 	try {
 		main();
 	} catch (err) {

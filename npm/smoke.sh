@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 # Install the packages npm/build.mjs assembled (packed to tarballs, exactly as
 # they'd be published) into a throwaway project, then run `agentsync --version`
-# through npx and — when bun is on PATH — bunx, asserting it reports the
-# packages' version. Proves the launcher, the platform package's os/cpu gating,
-# and the binary's exec bit survive a real `npm pack` + install.
+# through npx, bunx, and bunx --bun, asserting it reports the packages' version.
+# Proves the launcher resolves its platform package and runs the binary after a
+# real `npm pack` + install, and that the binary's exec bit survives packing
+# (asserted directly — the launcher's chmod-retry would otherwise mask its loss).
+# It does not exercise os/cpu gating: the matching platform tarball is installed
+# explicitly. Bun is required when CI is set, optional locally.
 #
 #   npm/smoke.sh <out-dir-from-build.mjs>
 #
@@ -40,9 +43,21 @@ check() {
 mkdir "$work/npm" && cd "$work/npm"
 echo '{"name":"smoke","version":"0.0.0","private":true}' >package.json
 npm install --no-audit --no-fund --loglevel=error "${tgz[@]}"
+bin="node_modules/$main-$plat/bin/agentsync"
+[[ -e "$bin" ]] || bin="$bin.exe"
+if [[ ! -x "$bin" ]]; then
+	echo "npm smoke FAIL: $bin lost its exec bit in npm pack/install" >&2
+	exit 1
+fi
 check npx npx --no-install agentsync
 
-if command -v bun >/dev/null; then
+if ! command -v bun >/dev/null; then
+	if [[ -n "${CI:-}" ]]; then
+		echo "npm smoke FAIL: bun not on PATH in CI; the bunx legs would be skipped" >&2
+		exit 1
+	fi
+	echo "npm smoke: bun not on PATH, skipping bunx"
+else
 	mkdir "$work/bun" && cd "$work/bun"
 	echo '{"name":"smoke","version":"0.0.0","private":true}' >package.json
 	bun add --silent "${tgz[@]}"

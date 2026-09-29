@@ -168,11 +168,17 @@ The release's `npm` job calls `.github/workflows/npm-publish.yml`, which
 downloads the new Release's archives and `checksums.txt`, and runs
 `npm/build.mjs`. That script verifies each archive and publishes seven packages:
 one `agentsync.cc-<platform>-<arch>` package per binary, then the
-`agentsync.cc` launcher. Name@version pairs already on the registry are skipped,
-so re-running the job (or dispatching **npm-publish** for the tag) is how you
-recover a failed npm step. It never re-runs GoReleaser. CI builds the packages
-from every goreleaser snapshot and installs them through npx and bunx
-(`npm/smoke.sh`); `node --test npm/*.test.mjs` runs the unit tests.
+`agentsync.cc` launcher. A name@version already on the registry is skipped if
+its tarball is identical to ours, so re-running the job (or dispatching
+**npm-publish** for the tag, from the default branch) is how you recover a
+failed npm step. It never re-runs GoReleaser. If the registry copy *differs*,
+the run fails before the launcher is published: that means a squatted name, or a
+build that changed since the first publish. A stable version older than the
+current `latest` goes to the `backfill` dist-tag, so backfilling an old release
+never downgrades `npx agentsync.cc`. CI builds the packages from every
+goreleaser snapshot and installs them through npx and bunx (`npm/smoke.sh`);
+`node --test npm/*.test.mjs` runs the unit tests. `just ci` runs both, so it
+needs Node (and optionally Bun) alongside Go.
 
 Publishing is gated on a credential, like Chocolatey. With none configured the
 job builds and dry-runs the packages, then stops. To go live:
@@ -180,7 +186,10 @@ job builds and dry-runs the packages, then stops. To go live:
 1. **Bootstrap with a token.** npm only allows trusted publishing on packages
    that already exist. Create a granular npm access token with publish rights
    and save it as the `NPM_TOKEN` repository secret. Then run **npm-publish**
-   for the latest tag to create all seven packages.
+   for the latest tag to create all seven packages. Do this promptly: the six
+   `agentsync.cc-*` platform names are unscoped, so until they exist anyone can
+   register one (the publish would then fail safely, as above, rather than ship
+   their binary).
 2. **Switch to trusted publishing (no stored secret).** On npmjs.com, add a
    GitHub Actions trusted publisher to each of the seven packages, for this
    repository with workflow `release.yml` **and** again with workflow
