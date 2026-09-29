@@ -41,11 +41,14 @@ function platformPackage(mainPkg, platform, arch) {
 	return Object.keys(mainPkg.optionalDependencies || {}).find((n) => platformSuffix(n) === want) || null;
 }
 
-// binaryPath resolves the binary inside the installed platform package.
-// Throws (MODULE_NOT_FOUND) when the package manager didn't install it.
-function binaryPath(pkgName, platform) {
+// resolvePlatform finds the installed platform package: its binary and its
+// version. Throws (MODULE_NOT_FOUND) when the package manager didn't install it.
+function resolvePlatform(pkgName, platform) {
 	const pkgJSON = require.resolve(`${pkgName}/package.json`);
-	return path.join(path.dirname(pkgJSON), 'bin', platform === 'win32' ? 'agentsync.exe' : 'agentsync');
+	return {
+		bin: path.join(path.dirname(pkgJSON), 'bin', platform === 'win32' ? 'agentsync.exe' : 'agentsync'),
+		version: require(pkgJSON).version,
+	};
 }
 
 function fail(lines) {
@@ -68,9 +71,9 @@ function main() {
 		]);
 	}
 
-	let bin;
+	let resolved;
 	try {
-		bin = binaryPath(pkgName, platform);
+		resolved = resolvePlatform(pkgName, platform);
 	} catch {
 		fail([
 			`the platform package ${pkgName}@${mainPkg.version} is not installed.`,
@@ -81,13 +84,27 @@ function main() {
 			`Other install options: ${INSTALL_DOCS}`,
 		]);
 	}
-	run(bin, process.argv.slice(2), true);
+	// require.resolve walks up node_modules, so with the optional dependency
+	// omitted it can find ANOTHER install's copy at a different version. Never
+	// run a binary that isn't the one this launcher was published with.
+	if (resolved.version !== mainPkg.version) {
+		fail([
+			`found ${pkgName}@${resolved.version}, but this is ${mainPkg.name}@${mainPkg.version}.`,
+			'The platform package must be the same version. Reinstall, or install it directly:',
+			`  npm install ${pkgName}@${mainPkg.version}`,
+		]);
+	}
+	run(resolved.bin, process.argv.slice(2));
 }
 
-// run execs the binary with inherited stdio and mirrors its exit. `retryChmod`
-// covers a package manager that dropped the tarball's exec bit (EACCES): restore
-// it once and retry.
-function run(bin, args, retryChmod) {
+// Signals Node handles itself, which must never be re-raised on the launcher:
+// Node ignores SIGPIPE, and SIGUSR1 starts its inspector (a debugger port).
+const NOT_RERAISED = new Set(['SIGPIPE', 'SIGUSR1']);
+
+// run execs the binary with inherited stdio and mirrors its exit. A package
+// manager that dropped the tarball's exec bit (EACCES) gets it restored once,
+// and the spawn retried.
+function run(bin, args) {
 	// While the binary runs, the launcher must neither die first nor swallow a
 	// signal meant for it. A terminal Ctrl-C already reaches the child through the
 	// foreground process group, but a signal sent to the launcher's pid alone
@@ -96,71 +113,69 @@ function run(bin, args, retryChmod) {
 	// on Windows child.kill() is a hard TerminateProcess and the console already
 	// delivers Ctrl-C to the child, so just stay alive.
 	//
-	// The handlers are installed BEFORE spawn(): a signal landing between spawn()
-	// and handler registration would otherwise kill the launcher with the default
-	// action and orphan the freshly started binary. One arriving before the child
-	// exists is held and delivered right after spawn().
+	// The handlers are installed BEFORE spawn(), once, for the whole run
+	// (including the EACCES retry). Installing them is what arms the OS-level
+	// handler: a signal that lands before it would take the default action and
+	// kill the launcher. One that lands after is queued, and Node runs the
+	// listener from the event loop, by which time `child` is the live process —
+	// the retried one if the first spawn failed.
 	let child = null;
-	let pending = null;
-	const handlers = {};
+	const forward = (sig) => {
+		if (process.platform === 'win32') return;
+		if (child && child.exitCode === null && child.signalCode === null) {
+			try {
+				child.kill(sig);
+			} catch {
+				// already gone
+			}
+		}
+	};
 	for (const sig of FORWARDED) {
-		handlers[sig] = () => {
-			if (process.platform === 'win32') return;
-			if (!child) {
-				pending = sig;
-				return;
-			}
-			if (child.exitCode === null && child.signalCode === null) {
-				try {
-					child.kill(sig);
-				} catch {
-					// already gone
-				}
-			}
-		};
 		try {
-			process.on(sig, handlers[sig]);
+			process.on(sig, forward);
 		} catch {
 			// signal unsupported on this platform (e.g. SIGQUIT on Windows)
 		}
 	}
 	const detach = () => {
-		for (const sig of FORWARDED) process.removeListener(sig, handlers[sig]);
+		for (const sig of FORWARDED) process.removeListener(sig, forward);
 	};
 
-	child = spawn(bin, args, { stdio: 'inherit' });
-	if (pending && child.pid !== undefined) handlers[pending]();
-
-	child.on('error', (err) => {
-		detach();
-		if (err.code === 'EACCES' && retryChmod) {
-			try {
-				fs.chmodSync(bin, 0o755);
-				run(bin, args, false);
-				return;
-			} catch {
-				// fall through to the error below
+	let retried = false;
+	const start = () => {
+		child = spawn(bin, args, { stdio: 'inherit' });
+		child.on('error', (err) => {
+			if (err.code === 'EACCES' && !retried) {
+				retried = true;
+				try {
+					fs.chmodSync(bin, 0o755);
+					start();
+					return;
+				} catch {
+					// fall through to the error below
+				}
 			}
-		}
-		fail([`failed to run ${bin}: ${err.message}`]);
-	});
-
-	child.on('exit', (code, signal) => {
-		detach();
-		if (signal) {
-			// Die of the same signal so the caller (a shell, `set -e`, a CI step) sees
-			// what really happened — e.g. 130 for Ctrl-C — rather than a plain 1.
-			process.kill(process.pid, signal);
-			// Still alive: Node ignores or handles this signal itself (SIGPIPE,
-			// SIGUSR1), or it can't be raised here (Windows). Exit with the shell's
-			// encoding of it instead.
-			process.exit(128 + (os.constants.signals[signal] || 0));
-		}
-		process.exit(code === null ? 1 : code);
-	});
+			detach();
+			fail([`failed to run ${bin}: ${err.message}`]);
+		});
+		child.on('exit', (code, signal) => {
+			detach();
+			if (signal) {
+				// Die of the same signal so the caller (a shell, `set -e`, a CI step)
+				// sees what really happened — e.g. 130 for Ctrl-C — rather than a
+				// plain 1.
+				if (!NOT_RERAISED.has(signal)) process.kill(process.pid, signal);
+				// Still alive (a signal Node handles itself, or one that can't be
+				// raised here, e.g. on Windows): exit with the shell's encoding.
+				process.exit(128 + (os.constants.signals[signal] || 0));
+			}
+			process.exit(code === null ? 1 : code);
+		});
+	};
+	start();
 }
 
-module.exports = { platformPackage, binaryPath };
+module.exports = { platformPackage, resolvePlatform };
 
 if (require.main === module) {
 	main();

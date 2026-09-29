@@ -173,16 +173,18 @@ scope so nobody else can publish under their names; users only type
 `agentsync.cc`.
 
 A name@version already on the registry is skipped if its tarball is identical to
-ours, so **re-running the failed job** (or dispatching **npm-publish** from the
-release *tag*) is how you recover a failed npm step. It never re-runs
-GoReleaser. If the registry copy *differs*, the run fails before the launcher is
-published, and the error names who published it. If that's you, the npm/
-tooling, `LICENSE`, or the npm README changed since the first attempt (for
-example, a dispatch from the default branch instead of the tag). If it isn't,
-stop and investigate. Dispatch from the default branch only to backfill a
-version tagged before `npm/` existed. A stable version older than the current
-`latest` goes to the `backfill` dist-tag, so backfilling never downgrades
-`npx agentsync.cc`.
+ours, so **re-running the failed job**, or dispatching **npm-publish** with the
+release tag, is how you recover a failed npm step. It never re-runs GoReleaser,
+and it doesn't matter which branch you dispatch from: the job checks out the
+*tag* and packages with the `npm/` tooling that tag carries, on a pinned Node, so
+the rebuilt tarballs are byte-identical. A tag cut before `npm/` existed falls
+back to the default branch's tooling; that is how you backfill an old release.
+If a registry copy *differs*, the run fails before the launcher is published,
+and the error names who published it. If that isn't you, stop and investigate.
+If it is, something changed between attempts (the default branch's tooling for a
+backfill, or the pinned Node version). If a re-run can't fix it, cut a patch
+release. A stable version older than the current `latest` goes to the
+`backfill` dist-tag, so backfilling never downgrades `npx agentsync.cc`.
 
 CI builds the packages from every goreleaser snapshot and installs them through
 npx and bunx (`npm/smoke.sh`); `node --test npm/*.test.mjs` runs the unit tests.
@@ -197,8 +199,9 @@ job builds and dry-runs the packages, then stops. To go live:
    (the seven names don't exist yet, so they can't be selected individually)
    and **Bypass two-factor authentication** checked, since CI can't enter a
    one-time password.
-   Save it as the `NPM_TOKEN` repository secret, then run **npm-publish** for
-   the latest tag to create all seven packages. Nobody else can register the
+   Save it as the `NPM_TOKEN` repository secret, then run **npm-publish** with
+   the latest tag to create all seven packages (a tag cut before `npm/` existed
+   uses the default branch's tooling automatically). Nobody else can register the
    scoped platform names, but `agentsync.cc` itself is unscoped, so publish it
    promptly.
 2. **Switch to trusted publishing (no stored secret).** On npmjs.com, add a
