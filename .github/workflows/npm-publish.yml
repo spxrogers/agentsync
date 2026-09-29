@@ -1,0 +1,110 @@
+name: npm-publish
+# Publish a GitHub Release's binaries to npm as `agentsync.cc`, so
+# `npx agentsync.cc` / `bunx agentsync.cc` / `npm i -g agentsync.cc` work. The
+# packaging lives in npm/ (npm/build.mjs, the launcher in npm/bin/): one small
+# launcher package plus one `agentsync.cc-<platform>-<arch>` package per binary.
+#
+# Two ways in, both landing in the single `npm` job below:
+#   1. called by the `release` workflow (`workflow_call`) once GoReleaser has
+#      published the GitHub Release, so every release reaches npm.
+#   2. triggered manually ("Actions → npm-publish → Run workflow") with a tag, to
+#      publish (or finish publishing) an EXISTING release — e.g. to backfill a
+#      version cut before npm existed, or to recover a failed npm step without
+#      re-running GoReleaser.
+#
+# It never rebuilds anything: it downloads the release's archives + checksums.txt
+# from the GitHub Release, and npm/build.mjs sha256-checks every archive before
+# packing its binary, so npm ships exactly the bytes the Release ships. Re-running
+# is safe: name@version pairs already on the registry are skipped.
+#
+# Auth — gated like Chocolatey: with no credential the job still builds and
+# dry-runs the packages (so the path is proven every release), then stops.
+#   - NPM_TOKEN secret set → publish with that token (the bootstrap path: npm only
+#     lets you configure trusted publishing on packages that already exist).
+#   - else repository variable NPM_TRUSTED_PUBLISHING == 'true' → publish via npm
+#     trusted publishing (OIDC, no stored secret). Configure it on each of the
+#     seven packages for BOTH release.yml and npm-publish.yml: npm checks the
+#     workflow that started the run, which is release.yml when called from there.
+# Either way the packages carry npm provenance (hence id-token: write).
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to publish to npm, e.g. v0.16.0"
+        required: true
+        type: string
+  workflow_call:
+    inputs:
+      tag:
+        description: "Release tag to publish to npm"
+        required: true
+        type: string
+
+# contents:read to download the Release assets; id-token:write for provenance and
+# trusted publishing. A caller must grant both (release.yml's `npm` job does).
+permissions:
+  contents: read
+  id-token: write
+
+# Serialize publishes; never cancel one mid-flight (half the platform packages
+# published is recoverable by a re-run, but there's no reason to cause it).
+concurrency:
+  group: npm-publish
+  cancel-in-progress: false
+
+jobs:
+  npm:
+    name: npm-publish (agentsync.cc)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Detect npm credential
+        id: auth
+        shell: bash
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          TRUSTED: ${{ vars.NPM_TRUSTED_PUBLISHING }}
+        run: |
+          if [ -n "${NPM_TOKEN//[[:space:]]/}" ]; then
+            echo "mode=token" >> "$GITHUB_OUTPUT"
+          elif [ "$TRUSTED" = "true" ]; then
+            echo "mode=oidc" >> "$GITHUB_OUTPUT"
+          else
+            echo "mode=dry-run" >> "$GITHUB_OUTPUT"
+            echo "::notice::npm publishing is not configured (no NPM_TOKEN secret, NPM_TRUSTED_PUBLISHING var not 'true') — building and dry-running the packages only"
+          fi
+      - uses: actions/checkout@v4
+      # Node 24 bundles npm 11, which trusted publishing needs (>= 11.5.1).
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - name: Ensure npm supports trusted publishing
+        if: steps.auth.outputs.mode == 'oidc'
+        run: npm install -g 'npm@^11.5.1' && npm --version
+      - name: Download the release's archives
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          # The tag arrives via env and is validated before use, so a hostile
+          # dispatch input can't reach the shell or gh's arguments.
+          if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::tag '$TAG' is not v+semver (e.g. v0.16.0)"
+            exit 1
+          fi
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir release \
+            --pattern '*.tar.gz' --pattern '*.zip' --pattern checksums.txt
+          ls -l release
+      - name: Build and publish the packages
+        env:
+          TAG: ${{ inputs.tag }}
+          MODE: ${{ steps.auth.outputs.mode }}
+          # Empty unless publishing with a token; trusted publishing needs none.
+          NODE_AUTH_TOKEN: ${{ steps.auth.outputs.mode == 'token' && secrets.NPM_TOKEN || '' }}
+        run: |
+          set -euo pipefail
+          mode=(--provenance)
+          if [ "$MODE" = "dry-run" ]; then mode=(--dry-run); fi
+          node npm/build.mjs --dist release --out npm-dist --version "${TAG#v}" \
+            --publish "${mode[@]}"

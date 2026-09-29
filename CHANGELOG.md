@@ -11,6 +11,17 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Added
 
+- **npm / Bun distribution: `npx agentsync.cc` and `bunx agentsync.cc`.** Every
+  release is published to npm as `agentsync.cc` (the command is still
+  `agentsync`; `agentsync` on npm is an unrelated project). The package is a
+  small Node launcher plus one prebuilt-binary package per platform
+  (`agentsync.cc-<platform>-<arch>`, linux/darwin/win32 × x64/arm64), selected
+  as an optional dependency with no install script, so `bunx` and
+  `--ignore-scripts` work. The binaries are the GitHub Release's own,
+  sha256-checked against its `checksums.txt`, and published with npm provenance.
+  The launcher passes argv, stdio, and the exit status through unchanged,
+  forwards signals, and names the missing platform package when optional
+  dependencies were omitted. See `npm/` and `.github/workflows/npm-publish.yml`.
 - **Dedicated Grok Build adapter** (`agentsync agent add grok`) with user/project
   instructions, complete skill directories, legacy Markdown commands, TOML MCP,
   and JSON command hooks. Includes detection, `GROK_HOME`, import/reconcile,

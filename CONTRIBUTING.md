@@ -137,7 +137,8 @@ private reporting path in [`SECURITY.md`](SECURITY.md).
 
 Releases are an annotated `vX.Y.Z` tag on a green commit; pushing the tag fires
 `.github/workflows/release.yml`, which runs GoReleaser (GitHub Release +
-Homebrew tap) and redeploys the docs site. Two equivalent ways to trigger it:
+Homebrew tap), publishes the npm packages, and redeploys the docs site. Two
+equivalent ways to trigger it:
 
 - **From a laptop:** `just release vX.Y.Z` — validates `v`+semver, then tags and
   pushes.
@@ -160,6 +161,33 @@ that version. To recover: fix the cause, delete the tag locally and on the
 remote (`git push origin :vX.Y.Z`), and re-cut it — or, if the tag is fine and
 only publishing failed, re-run GoReleaser against the existing tag
 (`goreleaser release --clean`).
+
+### npm (`npx agentsync.cc`)
+
+The release's `npm` job calls `.github/workflows/npm-publish.yml`, which
+downloads the new Release's archives and `checksums.txt`, and runs
+`npm/build.mjs`. That script verifies each archive and publishes seven packages:
+one `agentsync.cc-<platform>-<arch>` package per binary, then the
+`agentsync.cc` launcher. Name@version pairs already on the registry are skipped,
+so re-running the job (or dispatching **npm-publish** for the tag) is how you
+recover a failed npm step. It never re-runs GoReleaser. CI builds the packages
+from every goreleaser snapshot and installs them through npx and bunx
+(`npm/smoke.sh`); `node --test npm/*.test.mjs` runs the unit tests.
+
+Publishing is gated on a credential, like Chocolatey. With none configured the
+job builds and dry-runs the packages, then stops. To go live:
+
+1. **Bootstrap with a token.** npm only allows trusted publishing on packages
+   that already exist. Create a granular npm access token with publish rights
+   and save it as the `NPM_TOKEN` repository secret. Then run **npm-publish**
+   for the latest tag to create all seven packages.
+2. **Switch to trusted publishing (no stored secret).** On npmjs.com, add a
+   GitHub Actions trusted publisher to each of the seven packages, for this
+   repository with workflow `release.yml` **and** again with workflow
+   `npm-publish.yml`. npm matches the workflow that *started* the run, which is
+   `release.yml` when the npm job is called from a release. Set the repository
+   variable `NPM_TRUSTED_PUBLISHING=true`, then delete the `NPM_TOKEN` secret.
+   The token takes precedence while it exists.
 
 ## Reporting bugs & requesting features
 

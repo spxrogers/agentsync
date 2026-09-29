@@ -249,3 +249,18 @@ jobs:
           # validates the signs: block's schema. CI only proves the cross-build
           # stays viable — release.yml is the run that actually signs.
           args: release --snapshot --skip=publish,chocolatey,sign --clean
+      # npm distribution (`npx agentsync.cc` / `bunx agentsync.cc`, see npm/): run
+      # the launcher + builder unit tests, then build the npm packages from THIS
+      # snapshot's archives (checksum-verified, exactly as npm-publish.yml does
+      # from a real Release) and install them from packed tarballs to prove npx
+      # and bunx run the snapshot binary. The real publish is npm-publish.yml.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: oven-sh/setup-bun@v2
+      - name: npm packaging tests + install smoke (npx, bunx)
+        run: |
+          shopt -s failglob
+          node --test npm/*.test.mjs
+          node npm/build.mjs --dist dist --out dist/npm
+          npm/smoke.sh dist/npm
