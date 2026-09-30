@@ -2,7 +2,7 @@
 // from node_modules/agentsync.cc/bin — against a fake platform package whose
 // "binary" is a shell script, and check argv/stdio/exit-status/signal fidelity.
 //
-//   node --test npm/
+//   node --test npm/*.test.mjs
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';

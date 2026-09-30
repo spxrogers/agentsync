@@ -194,9 +194,9 @@ between a failed publish and its re-run.
 
 The workflow always packages the tag, whatever ref it is run from. That is a
 guard against mistakes, not a security boundary: anyone who can push to the
-repository can edit the workflow or the tag's tooling. To gate publishing on review, put the job in a
-GitHub `environment:` restricted to `v*` tags with required reviewers, and bind
-the npm trusted publishers to that environment.
+repository can edit the workflow or the tag's tooling. To gate publishing on
+review, put the job in a GitHub `environment:` restricted to `v*` tags with
+required reviewers, and bind the npm trusted publishers to that environment.
 
 CI builds the packages from every goreleaser snapshot and installs them through
 npx and bunx (`npm/smoke.sh`); `node --test npm/*.test.mjs` runs the unit tests.
@@ -207,10 +207,10 @@ job builds and dry-runs the packages, then stops. To go live:
 
 1. **Bootstrap with a token.** npm only allows trusted publishing on packages
    that already exist. Create a granular npm access token for the account that
-   owns the `@spxrogers` scope, with **read and write** on **all packages**
-   (the seven names don't exist yet, so they can't be selected individually)
-   and **Bypass two-factor authentication** checked, since CI can't enter a
-   one-time password.
+   owns the `@spxrogers` scope, with **Read and write (publish and stage)** on
+   **All packages** (the seven names don't exist yet, so they can't be selected
+   individually; "stage only" can't publish), and **Bypass two-factor
+   authentication** checked, since CI can't enter a one-time password.
    Save it as the `NPM_TOKEN` repository secret, then run **npm-publish** with
    the latest tag to create all seven packages (a tag cut before `npm/` existed
    uses the default branch's tooling automatically). Nobody else can register the
@@ -220,7 +220,10 @@ job builds and dry-runs the packages, then stops. To go live:
    GitHub Actions trusted publisher to each of the seven packages, for this
    repository with workflow `release.yml` **and** again with workflow
    `npm-publish.yml`. npm matches the workflow that *started* the run, which is
-   `release.yml` when the npm job is called from a release. Set the repository
+   `release.yml` when the npm job is called from a release. On each of them,
+   tick **`npm publish`** under *Allowed actions*: trusted publishers created
+   since 2026-09-03 allow only `npm stage publish` by default, and the job
+   publishes directly, so it would fail without that. Set the repository
    variable `NPM_TRUSTED_PUBLISHING=true`, then delete the `NPM_TOKEN` secret.
    The token takes precedence while it exists.
 
