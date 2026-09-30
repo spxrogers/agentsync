@@ -261,6 +261,19 @@ jobs:
       - name: npm packaging tests + install smoke (npx, bunx)
         run: |
           shopt -s failglob
+          # The release-time Node-pin rules (npm-publish.yml), checked on every PR
+          # so a bad pin fails review instead of a release: one exact version,
+          # bundling npm >= 11.5.1.
+          pin="$(tr -d '\r' < npm/.node-version)"
+          if ! [[ "$pin" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error file=npm/.node-version::Node pin must be one exact version like 24.21.0, got $(printf '%q' "$pin")"
+            exit 1
+          fi
+          v="$(npm --version)"
+          if [ "$(printf '%s\n' 11.5.1 "$v" | sort -V | head -1)" != 11.5.1 ]; then
+            echo "::error file=npm/.node-version::npm $v (Node $(node --version), set up from pin $pin) is older than 11.5.1, which publishing needs"
+            exit 1
+          fi
           node --test npm/*.test.mjs
           node npm/build.mjs --dist dist --out dist/npm
           npm/smoke.sh dist/npm

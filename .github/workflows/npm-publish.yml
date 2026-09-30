@@ -37,6 +37,9 @@ name: npm-publish
 #     trusted publishing (OIDC, no stored secret). Configure it on each of the
 #     seven packages for BOTH release.yml and npm-publish.yml: npm checks the
 #     workflow that started the run, which is release.yml when called from there.
+#     Each trusted publisher must allow `npm publish` (Allowed actions): ones
+#     created since 2026-09-03 default to `npm stage publish` only, and this job
+#     publishes directly.
 # Either way the packages carry npm provenance (hence id-token: write).
 on:
   workflow_dispatch:
@@ -123,23 +126,27 @@ jobs:
         if: steps.tooling.outputs.from-tag == 'false'
         with:
           ref: ${{ github.event.repository.default_branch }}
-      # An exact version only: an alias (lts/*, latest) or a range would float,
-      # and a floating Node breaks the byte-identical re-run guarantee below.
-      - name: Check the Node pin is an exact version
-        run: |
-          pin="$(tr -d '[:space:]' < npm/.node-version)"
-          if ! [[ "$pin" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error file=npm/.node-version::Node pin '$pin' must be an exact version like 24.21.0"
-            exit 1
-          fi
       # Node is pinned exactly, in the checked-out tree (npm/.node-version), so the
       # pin travels with the tag like the rest of the tooling: npm's tarball
       # integrity hashes the gzip stream, which depends on Node's zlib, and a
       # different Node could make an identical re-run look like a different
-      # build. The pin must bundle npm >= 11.5.1 (trusted publishing).
+      # build. The pin must be ONE exact version (an alias such as lts/* or a
+      # range would float) bundling npm >= 11.5.1 (provenance and trusted
+      # publishing). The validated string itself is what setup-node gets, so the
+      # checked value and the used value can't diverge. (ci.yml checks the same
+      # rule on every PR.)
+      - name: Read the Node pin
+        id: pin
+        run: |
+          pin="$(tr -d '\r' < npm/.node-version)"   # $(...) drops trailing newlines only
+          if ! [[ "$pin" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error file=npm/.node-version::Node pin must be one exact version like 24.21.0, got $(printf '%q' "$pin")"
+            exit 1
+          fi
+          echo "version=${pin#v}" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-node@v4
         with:
-          node-version-file: npm/.node-version
+          node-version: ${{ steps.pin.outputs.version }}
           registry-url: https://registry.npmjs.org
       # Every real publish needs npm >= 11.5.1: trusted publishing requires it,
       # and an older npm silently ignores --provenance, so a token publish would
