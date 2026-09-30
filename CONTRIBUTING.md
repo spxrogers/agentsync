@@ -225,7 +225,12 @@ job builds and dry-runs the packages, then stops. To go live:
    since 2026-09-03 allow only `npm stage publish` by default, and the job
    publishes directly, so it would fail without that. Set the repository
    variable `NPM_TRUSTED_PUBLISHING=true`, then delete the `NPM_TOKEN` secret.
-   The token takes precedence while it exists.
+   (The token takes precedence while it exists.)
+3. **Retire the token.** Deleting the GitHub secret does not revoke the token
+   itself, which can still publish every package and bypasses 2FA. Revoke it on
+   npmjs.com (*Access Tokens*), then set each of the seven packages' *Settings →
+   Publishing access* to **Require two-factor authentication and disallow
+   tokens**. Trusted publishing is not a token and keeps working.
 
 ## Reporting bugs & requesting features
 
