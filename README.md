@@ -146,6 +146,21 @@ Chocolatey packages pass through the community moderation queue before they're
 publicly installable, so a freshly published version can lag the other channels
 by a day or two.
 
+### Any platform — npm / Bun
+
+Run it without installing, or install it globally. The npm package is named
+`agentsync.cc` (the `agentsync` name on npm belongs to an unrelated project);
+the command it installs is `agentsync`:
+
+    npx agentsync.cc --version        # or: bunx agentsync.cc --version
+    npm install -g agentsync.cc       # or: bun add -g agentsync.cc
+
+The package is a small Node launcher plus a prebuilt binary for your platform
+(linux / darwin / win32 × x64 / arm64), pulled in as an optional dependency, with
+no install script. The binaries are the ones on the GitHub Release, verified
+against its `checksums.txt` before packing. Installing with `--omit=optional`
+leaves the binary out; the launcher tells you so.
+
 ### Any platform — prebuilt binary
 
 Download the archive for your OS/arch from the

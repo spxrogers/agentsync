@@ -137,7 +137,8 @@ private reporting path in [`SECURITY.md`](SECURITY.md).
 
 Releases are an annotated `vX.Y.Z` tag on a green commit; pushing the tag fires
 `.github/workflows/release.yml`, which runs GoReleaser (GitHub Release +
-Homebrew tap) and redeploys the docs site. Two equivalent ways to trigger it:
+Homebrew tap), publishes the npm packages, and redeploys the docs site. Two
+equivalent ways to trigger it:
 
 - **From a laptop:** `just release vX.Y.Z` — validates `v`+semver, then tags and
   pushes.
@@ -160,6 +161,76 @@ that version. To recover: fix the cause, delete the tag locally and on the
 remote (`git push origin :vX.Y.Z`), and re-cut it — or, if the tag is fine and
 only publishing failed, re-run GoReleaser against the existing tag
 (`goreleaser release --clean`).
+
+### npm (`npx agentsync.cc`)
+
+The release's `npm` job calls `.github/workflows/npm-publish.yml`, which
+downloads the new Release's archives and `checksums.txt`, and runs
+`npm/build.mjs`. That script verifies each archive and publishes seven packages:
+one `@spxrogers/agentsync.cc-<platform>-<arch>` package per binary, then the
+`agentsync.cc` launcher. The platform packages live in the maintainer's npm
+scope so nobody else can publish under their names; users only type
+`agentsync.cc`.
+
+A name@version already on the registry is skipped if its tarball is identical to
+ours, so **re-running the failed job**, or dispatching **npm-publish** with the
+release tag, is how you recover a failed npm step. It never re-runs GoReleaser,
+and it doesn't matter which branch you dispatch from: the job checks out the
+*tag* and packages with the `npm/` tooling that tag carries, on a pinned Node, so
+the rebuilt tarballs are byte-identical. A tag cut before `npm/` existed falls
+back to the default branch's tooling; that is how you backfill an old release.
+If a registry copy *differs*, the run fails before the launcher is published,
+and the error names who published it. If that isn't you, stop and investigate.
+If it is, something changed between attempts (the default branch's tooling for a
+backfill, or the pinned Node version). If a re-run can't fix it, cut a patch
+release. A stable version older than the current `latest` goes to the
+`backfill` dist-tag, so backfilling never downgrades `npx agentsync.cc`.
+
+Because a release is packaged with *its own* `npm/` tooling and Node pin
+(`npm/.node-version`), a fix to the launcher or the build script reaches npm only
+with the next release; re-publishing an old one never picks it up. (npm
+versions are immutable anyway.) Bump `npm/.node-version` between releases, never
+between a failed publish and its re-run.
+
+The workflow always packages the tag, whatever ref it is run from. That is a
+guard against mistakes, not a security boundary: anyone who can push to the
+repository can edit the workflow or the tag's tooling. To gate publishing on
+review, put the job in a GitHub `environment:` restricted to `v*` tags with
+required reviewers, and bind the npm trusted publishers to that environment.
+
+CI builds the packages from every goreleaser snapshot and installs them through
+npx and bunx (`npm/smoke.sh`); `node --test npm/*.test.mjs` runs the unit tests.
+`just ci` runs both, so it needs Node (and optionally Bun) alongside Go.
+
+Publishing is gated on a credential, like Chocolatey. With none configured the
+job builds and dry-runs the packages, then stops. To go live:
+
+1. **Bootstrap with a token.** npm only allows trusted publishing on packages
+   that already exist. Create a granular npm access token for the account that
+   owns the `@spxrogers` scope, with **Read and write (publish and stage)** on
+   **All packages** (the seven names don't exist yet, so they can't be selected
+   individually; "stage only" can't publish), and **Bypass two-factor
+   authentication** checked, since CI can't enter a one-time password.
+   Save it as the `NPM_TOKEN` repository secret, then run **npm-publish** with
+   the latest tag to create all seven packages (a tag cut before `npm/` existed
+   uses the default branch's tooling automatically). Nobody else can register the
+   scoped platform names, but `agentsync.cc` itself is unscoped, so publish it
+   promptly.
+2. **Switch to trusted publishing (no stored secret).** On npmjs.com, add a
+   GitHub Actions trusted publisher to each of the seven packages, for this
+   repository with workflow `release.yml` **and** again with workflow
+   `npm-publish.yml`. npm matches the workflow that *started* the run, which is
+   `release.yml` when the npm job is called from a release. On each of them,
+   tick **`npm publish`** under *Allowed actions*: trusted publishers created
+   since 2026-09-03 allow only `npm stage publish` by default, and the job
+   publishes directly, so it would fail without that. Set the repository
+   variable `NPM_TRUSTED_PUBLISHING=true`, then delete the `NPM_TOKEN` secret.
+   (The token takes precedence while it exists.)
+3. **Retire the token.** Deleting the GitHub secret does not revoke the token
+   itself, which can still publish every package and bypasses 2FA. Revoke it on
+   npmjs.com (*Access Tokens*), then set each of the seven packages' *Settings →
+   Publishing access* to **Require two-factor authentication and disallow
+   tokens**. Trusted publishing is not a token and keeps working.
 
 ## Reporting bugs & requesting features
 

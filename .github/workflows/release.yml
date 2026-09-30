@@ -6,6 +6,9 @@ name: release
 # (.github/workflows/docs-publish.yml) to rebuild and redeploy the agentsync.cc
 # site so the live docs always track the just-shipped CLI version. That same
 # workflow can be run manually to redeploy the docs out of band.
+# Likewise the `npm` job calls the reusable `npm-publish` workflow
+# (.github/workflows/npm-publish.yml) to publish the Release's binaries to npm as
+# `agentsync.cc`, so `npx agentsync.cc` / `bunx agentsync.cc` track it too.
 #
 # Two ways in, both landing in the single `goreleaser` job below:
 #   1. push an annotated `vX.Y.Z` tag on a green commit (the laptop path —
@@ -213,3 +216,28 @@ jobs:
   docs:
     needs: goreleaser
     uses: ./.github/workflows/docs-publish.yml
+
+  # Publish the just-released binaries to npm as `agentsync.cc` (npx/bunx). The
+  # steps live in the reusable `npm-publish` workflow
+  # (.github/workflows/npm-publish.yml), which downloads the Release's archives
+  # and checksums.txt rather than touching this run's build, and can also be run
+  # manually for any existing tag. That makes it the recovery path too: if this
+  # job fails, re-run it (already-published packages are skipped) or dispatch
+  # npm-publish for the tag, without re-running GoReleaser. Gated on `goreleaser`
+  # only; a failure here doesn't block the docs deploy. Without an npm credential
+  # it builds and dry-runs the packages, then stops. The job-level permissions
+  # REPLACE the workflow default, so grant what the called workflow needs:
+  # contents:read (download the Release) and id-token:write (npm provenance +
+  # trusted publishing). Only NPM_TOKEN is passed — not `secrets: inherit`, which
+  # would also hand it the Homebrew/Scoop/Chocolatey credentials.
+  npm:
+    needs: goreleaser
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/npm-publish.yml
+    with:
+      # The pushed tag, or the version the manual-dispatch path just tagged.
+      tag: ${{ inputs.version || github.ref_name }}
+    secrets:
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}

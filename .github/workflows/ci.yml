@@ -249,3 +249,35 @@ jobs:
           # validates the signs: block's schema. CI only proves the cross-build
           # stays viable — release.yml is the run that actually signs.
           args: release --snapshot --skip=publish,chocolatey,sign --clean
+      # npm distribution (`npx agentsync.cc` / `bunx agentsync.cc`, see npm/): run
+      # the launcher + builder unit tests, then build the npm packages from THIS
+      # snapshot's archives (checksum-verified, exactly as npm-publish.yml does
+      # from a real Release) and install them from packed tarballs to prove npx
+      # and bunx run the snapshot binary. The real publish is npm-publish.yml.
+      # The release-time Node-pin rules (npm-publish.yml), checked on every PR so
+      # a bad pin fails review instead of a release: one exact version (checked
+      # before setup-node, so a bad pin gets this message, not setup-node's),
+      # bundling npm >= 11.5.1 (checked after).
+      - name: Check the npm Node pin is one exact version
+        run: |
+          pin="$(tr -d '\r' < npm/.node-version)"
+          if ! [[ "$pin" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error file=npm/.node-version::Node pin must be one exact version like 24.21.0, got $(printf '%q' "$pin")"
+            exit 1
+          fi
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: npm/.node-version
+      - uses: oven-sh/setup-bun@v2
+      - name: npm packaging tests + install smoke (npx, bunx)
+        run: |
+          shopt -s failglob
+          pin="$(tr -d '\r' < npm/.node-version)"
+          v="$(npm --version)"
+          if [ "$(printf '%s\n' 11.5.1 "$v" | sort -V | head -1)" != 11.5.1 ]; then
+            echo "::error file=npm/.node-version::npm $v (Node $(node --version), set up from pin $pin) is older than 11.5.1, which publishing needs"
+            exit 1
+          fi
+          node --test npm/*.test.mjs
+          node npm/build.mjs --dist dist --out dist/npm
+          npm/smoke.sh dist/npm
