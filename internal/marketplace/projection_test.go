@@ -1,7 +1,9 @@
 package marketplace_test
 
 import (
+	"bytes"
 	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -570,8 +572,14 @@ func TestProject_Hooks_Timeout(t *testing.T) {
 // asymmetry with the canonical loader: the user's own hooks/<event>.toml fails
 // the load on a bad timeout, but a third-party plugin manifest must not be able
 // to make itself unusable — the entry projects without the timeout, and the
-// drop is logged rather than silent.
+// drop is logged rather than silent. The warning is asserted, not just the
+// zero timeout: an explicit 0 projects as 0 whether or not it warns.
 func TestProject_Hooks_UnrepresentableTimeoutIsDropped(t *testing.T) {
+	var logs bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
 	cache := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(cache, ".claude-plugin"), 0o755); err != nil {
 		t.Fatal(err)
@@ -579,7 +587,8 @@ func TestProject_Hooks_UnrepresentableTimeoutIsDropped(t *testing.T) {
 	manifest := `{"name":"p","hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[` +
 		`{"type":"command","command":"a.sh","timeout":-5},` +
 		`{"type":"command","command":"b.sh","timeout":"fast"},` +
-		`{"type":"command","command":"c.sh","timeout":1.5}]}]}}`
+		`{"type":"command","command":"c.sh","timeout":1.5},` +
+		`{"type":"command","command":"d.sh","timeout":0}]}]}}`
 	if err := os.WriteFile(filepath.Join(cache, ".claude-plugin", "plugin.json"), []byte(manifest), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -588,13 +597,16 @@ func TestProject_Hooks_UnrepresentableTimeoutIsDropped(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a bad plugin timeout must not fail projection: %v", err)
 	}
-	if len(pr.Hooks) != 3 {
-		t.Fatalf("hooks = %d, want 3 (every command still projects)", len(pr.Hooks))
+	if len(pr.Hooks) != 4 {
+		t.Fatalf("hooks = %d, want 4 (every command still projects)", len(pr.Hooks))
 	}
 	for _, h := range pr.Hooks {
 		if h.Timeout != 0 {
 			t.Errorf("%s: timeout = %d, want 0 (dropped)", h.Command, h.Timeout)
 		}
+	}
+	if got := strings.Count(logs.String(), "plugin hook timeout not representable"); got != 4 {
+		t.Errorf("drop warnings = %d, want 4 (one per dropped timeout); log:\n%s", got, logs.String())
 	}
 }
 

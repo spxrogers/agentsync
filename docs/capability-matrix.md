@@ -264,7 +264,8 @@ write-back alike — it is neither modeled nor passed through.
   never emitted (so agentsync's owned-array write can't clobber a native handler),
   and on ingest the whole event is left uncaptured with a warning. `timeout` is
   modeled in **seconds** and must be a whole number greater than zero: a native
-  `timeout` that is negative, fractional, or an explicit `0` is refused the same
+  `timeout` that is negative, fractional, past the 2,147,483-second (~24.8-day)
+  cap, or an explicit `0` is refused the same
   way (agentsync cannot tell a captured `0` from "no timeout key", and
   re-rendering it would swap in the harness default). **Gemini CLI counts this
   field in milliseconds**, so its adapter — and only its adapter — converts on
