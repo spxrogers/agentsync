@@ -1261,6 +1261,111 @@ func TestImport_HookTimeoutRetirementSplit(t *testing.T) {
 	}
 }
 
+// TestImportApply_HookTimeoutRoundTrip drives a native hook timeout through the
+// whole CLI: import captures it into hooks/PreToolUse.toml in canonical seconds,
+// apply renders it to every agent in that agent's own unit (Claude seconds,
+// Gemini milliseconds), and re-importing each rendered file reproduces the
+// canonical file byte-for-byte. The adapter tests cover each leg on its own;
+// this is the oracle that the legs agree with each other on disk.
+func TestImportApply_HookTimeoutRoundTrip(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		from   string // agent whose native file seeds the import
+		native string // that agent's settings.json
+	}{
+		{
+			name:   "claude seconds",
+			from:   "claude",
+			native: `{"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "echo hi", "timeout": 45}]}]}}`,
+		},
+		{
+			name:   "gemini milliseconds",
+			from:   "gemini",
+			native: `{"hooks": {"BeforeTool": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "echo hi", "timeout": 45000}]}]}}`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tmp, env := importTestEnv(t)
+			mustRun(t, env, "agent", "add", "gemini")
+			settings := map[string]string{
+				"claude": filepath.Join(tmp, ".claude", "settings.json"),
+				"gemini": filepath.Join(tmp, ".gemini", "settings.json"),
+			}
+			if err := os.MkdirAll(filepath.Dir(settings[tc.from]), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(settings[tc.from], []byte(tc.native), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			mustRun(t, env, "import", tc.from+":hook:PreToolUse")
+			canonical := filepath.Join(tmp, ".agentsync", "hooks", "PreToolUse.toml")
+			hooks, _ := parseTOMLFile(t, canonical)["hook"].([]any)
+			if len(hooks) != 1 {
+				t.Fatalf("canonical hooks = %#v, want one [[hook]]", hooks)
+			}
+			if got := hooks[0].(map[string]any)["timeout"]; got != int64(45) {
+				t.Fatalf("canonical timeout = %#v, want 45 (seconds)", got)
+			}
+			want, err := os.ReadFile(canonical)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			mustRun(t, env, "apply")
+			for _, r := range []struct {
+				agent, event string
+				timeout      float64
+			}{
+				{agent: "claude", event: "PreToolUse", timeout: 45},
+				{agent: "gemini", event: "BeforeTool", timeout: 45000},
+			} {
+				if got := nativeHookTimeout(t, settings[r.agent], r.event); got != r.timeout {
+					t.Errorf("%s rendered timeout = %v, want %v", r.agent, got, r.timeout)
+				}
+			}
+
+			// Re-importing either rendered file must land on the same canonical
+			// bytes: a unit slip on either side would rewrite the timeout.
+			for _, agent := range []string{"claude", "gemini"} {
+				mustRun(t, env, "import", agent+":hook:PreToolUse")
+				got, err := os.ReadFile(canonical)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !bytes.Equal(got, want) {
+					t.Fatalf("re-import from %s changed the canonical hook:\n got %s\nwant %s", agent, got, want)
+				}
+			}
+		})
+	}
+}
+
+// nativeHookTimeout returns the timeout of the single handler under event in a
+// Claude/Gemini-shaped settings.json.
+func nativeHookTimeout(t *testing.T, path, event string) float64 {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	var doc struct {
+		Hooks map[string][]struct {
+			Hooks []struct {
+				Timeout float64 `json:"timeout"`
+			} `json:"hooks"`
+		} `json:"hooks"`
+	}
+	if err := json.Unmarshal(data, &doc); err != nil {
+		t.Fatalf("parse %s: %v\n%s", path, err, data)
+	}
+	groups := doc.Hooks[event]
+	if len(groups) != 1 || len(groups[0].Hooks) != 1 {
+		t.Fatalf("%s: want one %s handler, got:\n%s", path, event, data)
+	}
+	return groups[0].Hooks[0].Timeout
+}
+
 // TestImport_RetiresStaleHookOnGeminiEnrichment is the gemini-driven twin of
 // TestImport_RetiresStaleHookOnNativeEnrichment, exercising the renaming leg
 // end-to-end: the native entry is spelled "BeforeTool" in .gemini/settings.json,
