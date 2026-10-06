@@ -65,7 +65,9 @@ the model's spelling of "no timeout key at all". Claude Code, Codex, Cursor and
 Grok Build document their native `timeout` in seconds and pass it straight
 through; **Gemini CLI documents milliseconds**, so its adapter multiplies on
 render and divides on ingest, refusing any native value that is not a whole
-number of seconds rather than rounding it. A canonical timeout outside the
+number of seconds rather than rounding it. The cap is `math.MaxInt32 / 1000`
+seconds so the multiplied millisecond figure always fits in a 32-bit int and
+re-ingests as the same canonical value. A canonical timeout outside the
 representable range fails the load (`loadHooks`) instead of being silently
 dropped at render, and a native one outside it is refused as *unmodelable*
 rather than *malformed* — the distinction that decides whether import retires

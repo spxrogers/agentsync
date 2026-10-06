@@ -1074,7 +1074,11 @@ func pluginHookTimeout(m map[string]any, event string) int {
 		return 0
 	}
 	n, res := source.HookTimeoutNumber(raw)
-	if res != source.HookTimeoutOK || n == 0 {
+	// HookTimeoutNumber does not apply the canonical ceiling: plugin timeouts
+	// are seconds, so a value past MaxHookTimeout is dropped here rather than
+	// projected and later rendered as a Gemini millisecond figure import
+	// cannot read back.
+	if res != source.HookTimeoutOK || n == 0 || n > int64(source.MaxHookTimeout) {
 		slog.Warn("plugin hook timeout not representable; projecting without it",
 			"event", event, "timeout", raw)
 		return 0

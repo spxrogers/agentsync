@@ -63,6 +63,12 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Fixed
 
+- **A large hook timeout no longer makes Gemini import delete the shared hook file.**
+  The canonical ceiling is `MaxInt32/1000` seconds (~24.8 days), checked after
+  Gemini's millisecond conversion rather than against the raw native number.
+  Every timeout agentsync can write is one it can read back. A larger value
+  fails the load instead of rendering a figure import treats as unmodelable
+  and then retires `hooks/<event>.toml` for every agent.
 - **Numbers in Codex's `config.toml` no longer render as strings.** `MergeTOML`
   passed `json.Number` values through to the TOML encoder, which marshaled them
   as quoted strings — so an MCP server's `startup_timeout_sec = 10` came back as

@@ -61,6 +61,18 @@ func TestRefusedHookEvents_StructuralVsSemantic(t *testing.T) {
 			`{ "preToolUse": [ { "command": "x", "timeout": "fast" } ] }`, false,
 		},
 		{
+			"semantic: negative timeout",
+			`{ "preToolUse": [ { "command": "x", "timeout": -5 } ] }`, true,
+		},
+		{
+			"semantic: fractional timeout",
+			`{ "preToolUse": [ { "command": "x", "timeout": 1.5 } ] }`, true,
+		},
+		{
+			"semantic: explicit zero timeout",
+			`{ "preToolUse": [ { "command": "x", "timeout": 0 } ] }`, true,
+		},
+		{
 			"structural: event value not an array",
 			`{ "preToolUse": { "command": "x" } }`, false,
 		},

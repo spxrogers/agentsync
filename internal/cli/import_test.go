@@ -1198,6 +1198,69 @@ func TestImport_RetiresStaleHookOnNativeEnrichment(t *testing.T) {
 	}
 }
 
+// TestImport_HookTimeoutRetirementSplit is the #124 pair for timeout itself.
+// A native number the model cannot carry (timeout: -5) is a semantic refusal
+// and retires the canonical file. A native typo (timeout: "fast") is
+// structural and must leave hooks/PreToolUse.toml alone.
+func TestImport_HookTimeoutRetirementSplit(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		timeout string
+		retire  bool
+	}{
+		{name: "negative number retires", timeout: "-5", retire: true},
+		{name: "string typo does not retire", timeout: `"fast"`, retire: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tmp, env := importTestEnv(t)
+			settings := filepath.Join(tmp, ".claude", "settings.json")
+			if err := os.MkdirAll(filepath.Dir(settings), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			clean := `{
+				"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "echo hi"}]}]}
+			}`
+			if err := os.WriteFile(settings, []byte(clean), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if out, err := runCLI(t, env, "import", "claude:hook:PreToolUse"); err != nil {
+				t.Fatalf("import clean hook: %v\n%s", err, out)
+			}
+			canonical := filepath.Join(tmp, ".agentsync", "hooks", "PreToolUse.toml")
+			if _, err := os.Stat(canonical); err != nil {
+				t.Fatalf("precondition: canonical hook not captured: %v", err)
+			}
+
+			native := `{
+				"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "echo hi", "timeout": ` + tc.timeout + `}]}]}
+			}`
+			if err := os.WriteFile(settings, []byte(native), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			out, err := runCLI(t, env, "import", "claude")
+			if err != nil {
+				t.Fatalf("re-import: %v\n%s", err, out)
+			}
+			_, statErr := os.Stat(canonical)
+			if tc.retire {
+				if !strings.Contains(out, "retired canonical hooks/PreToolUse.toml") {
+					t.Fatalf("import did not announce the retirement:\n%s", out)
+				}
+				if !os.IsNotExist(statErr) {
+					t.Fatalf("unrepresentable timeout should retire the canonical file; stat err=%v", statErr)
+				}
+				return
+			}
+			if strings.Contains(out, "retired canonical hooks/PreToolUse.toml") {
+				t.Fatalf("a timeout typo must not retire canonical config:\n%s", out)
+			}
+			if statErr != nil {
+				t.Fatalf("malformed timeout must leave the canonical file; stat err=%v", statErr)
+			}
+		})
+	}
+}
+
 // TestImport_RetiresStaleHookOnGeminiEnrichment is the gemini-driven twin of
 // TestImport_RetiresStaleHookOnNativeEnrichment, exercising the renaming leg
 // end-to-end: the native entry is spelled "BeforeTool" in .gemini/settings.json,

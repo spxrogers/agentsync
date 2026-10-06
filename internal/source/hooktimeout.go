@@ -5,13 +5,14 @@ import (
 	"math"
 )
 
-// MaxHookTimeout is the largest value Hook.Timeout carries, in whole units of
-// whatever a native harness counts in (seconds for Claude/Codex/Cursor/Grok,
-// milliseconds for Gemini). The ceiling is MaxInt32 so the value converts to
-// int on every platform agentsync builds for, and so a native timeout that is
-// really a millisecond figure typed into a seconds field cannot silently become
-// a nonsense duration. 2^31-1 seconds is ~68 years; nothing legitimate is lost.
-const MaxHookTimeout = math.MaxInt32
+// MaxHookTimeout is the largest canonical Hook.Timeout, in seconds. The
+// ceiling is MaxInt32/1000 so Gemini's render (seconds × 1000 milliseconds)
+// always fits in a 32-bit int and re-ingests as the same canonical value:
+// every timeout an adapter can write is one it can read back. A larger cap
+// lets apply emit a millisecond figure import then treats as unmodelable,
+// which retires hooks/<event>.toml for every agent. ~24.8 days; nothing
+// legitimate is lost.
+const MaxHookTimeout = math.MaxInt32 / 1000
 
 // HookTimeoutParse classifies a native "timeout" value against what
 // Hook.Timeout is able to represent.
@@ -31,7 +32,8 @@ const (
 	HookTimeoutOK HookTimeoutParse = iota
 
 	// HookTimeoutUnrepresentable is a well-formed NUMBER the canonical model
-	// cannot carry: negative, fractional, beyond MaxHookTimeout, or an
+	// cannot carry: negative, fractional, not a whole number of seconds after
+	// a harness's unit conversion, beyond MaxHookTimeout seconds, or an
 	// explicit zero. Zero is unrepresentable because Timeout == 0 is how the
 	// model spells "no timeout key at all" — a native 0 captured as 0 would
 	// re-render with the key gone, silently swapping the harness default in
@@ -51,7 +53,7 @@ const (
 func (p HookTimeoutParse) Reason() string {
 	switch p {
 	case HookTimeoutUnrepresentable:
-		return `a "timeout" agentsync cannot represent (want a whole number of seconds greater than zero)`
+		return `a "timeout" agentsync cannot represent (want a positive whole number of seconds; a millisecond timeout, such as Gemini's, must be a multiple of 1000)`
 	case HookTimeoutMalformed:
 		return `a "timeout" that is not a number`
 	default:
@@ -65,10 +67,11 @@ func (p HookTimeoutParse) Reason() string {
 func (p HookTimeoutParse) Structural() bool { return p == HookTimeoutMalformed }
 
 // HookTimeoutNumber interprets one native JSON or TOML number as a
-// non-negative whole count of time units. It is unit-agnostic: callers hold
-// the seconds-vs-milliseconds knowledge (see adapter.ParseHookTimeout and
-// adapter.ParseHookTimeoutMillis) because that is a per-harness fact, while
-// what the canonical int can hold is a property of this model.
+// non-negative whole count of time units that fits in int64. It does not
+// apply MaxHookTimeout: that ceiling is in canonical seconds, and a
+// millisecond field is a thousand times larger than the seconds it converts
+// to. Callers convert units first, then reject a result above MaxHookTimeout
+// (adapter.parseHookTimeoutUnits, pluginHookTimeout).
 //
 // Every numeric shape a decoder in this repo can produce is handled: int (TOML,
 // and Go literals in tests), int64 (TOML integers), float64 (encoding/json
@@ -93,8 +96,9 @@ func HookTimeoutNumber(raw any) (int64, HookTimeoutParse) {
 		}
 		// Int64 also fails on "30.0" and on an integer too large for int64, so
 		// fall through to the float reading rather than calling either one a
-		// typo. A value that overflows float64 lands on +Inf and is refused
-		// below as unrepresentable, which is what it is.
+		// typo. json.Number("1e400") does not land on +Inf: Float64 returns
+		// strconv.ErrRange first, and that is a malformed reading (the token
+		// is not a finite number), not an unrepresentable one.
 		f, err := n.Float64()
 		if err != nil {
 			return 0, HookTimeoutMalformed
@@ -106,7 +110,7 @@ func HookTimeoutNumber(raw any) (int64, HookTimeoutParse) {
 }
 
 func hookTimeoutFromInt64(n int64) (int64, HookTimeoutParse) {
-	if n < 0 || n > MaxHookTimeout {
+	if n < 0 {
 		return 0, HookTimeoutUnrepresentable
 	}
 	return n, HookTimeoutOK
@@ -115,7 +119,12 @@ func hookTimeoutFromInt64(n int64) (int64, HookTimeoutParse) {
 func hookTimeoutFromFloat(f float64) (int64, HookTimeoutParse) {
 	// Range-check BEFORE the int64 conversion: converting a float outside
 	// int64's range is undefined in Go and would produce a garbage timeout.
-	if math.IsNaN(f) || math.IsInf(f, 0) || f < 0 || f > MaxHookTimeout {
+	// The canonical MaxHookTimeout ceiling is applied by the caller after
+	// unit conversion, not here.
+	// 0x1p63 is 2^63, the smallest float64 strictly above MaxInt64. Comparing
+	// against float64(MaxInt64) is wrong: that conversion rounds up to 2^63,
+	// so a value of 2^63 would pass and then overflow the int64 conversion.
+	if math.IsNaN(f) || math.IsInf(f, 0) || f < 0 || f >= 0x1p63 {
 		return 0, HookTimeoutUnrepresentable
 	}
 	if f != math.Trunc(f) {

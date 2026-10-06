@@ -42,12 +42,19 @@ func parseHookTimeoutUnits(h map[string]any, perSecond int64) (int, source.HookT
 	// An explicit native 0 is a value the model cannot tell from "absent"; a
 	// value that does not divide into whole seconds would have to be rounded.
 	// Both are unrepresentable rather than malformed — the native shape is
-	// perfectly valid, agentsync just cannot carry it. See
-	// source.HookTimeoutUnrepresentable.
+	// perfectly valid, agentsync just cannot carry it. The canonical ceiling
+	// is applied to the converted seconds, never to the raw native number:
+	// Gemini's milliseconds are a thousand times larger than the seconds they
+	// represent, and checking them against MaxHookTimeout first would refuse
+	// a timeout agentsync itself had just rendered.
 	if n == 0 || n%perSecond != 0 {
 		return 0, source.HookTimeoutUnrepresentable
 	}
-	return int(n / perSecond), source.HookTimeoutOK
+	seconds := n / perSecond
+	if seconds > int64(source.MaxHookTimeout) {
+		return 0, source.HookTimeoutUnrepresentable
+	}
+	return int(seconds), source.HookTimeoutOK
 }
 
 // SetHookTimeout writes a canonical timeout onto a native handler object in

@@ -144,6 +144,38 @@ func TestIngestHooks_SubSecondTimeoutRefused(t *testing.T) {
 	}
 }
 
+// TestHookTimeout_MaxSecondsRoundTrips pins the ceiling the Gemini conversion
+// has to survive in both directions. MaxHookTimeout seconds renders as
+// MaxHookTimeout×1000 milliseconds, and ingesting that file must come back as
+// the same canonical value. A cap checked against the raw milliseconds would
+// refuse the number agentsync just wrote and, on import, retire the shared
+// hooks/<event>.toml.
+func TestHookTimeout_MaxSecondsRoundTrips(t *testing.T) {
+	testenv.RequireContainer(t)
+	tmp := t.TempDir()
+	a := gemini.New(gemini.Options{TargetRoot: tmp})
+	renderApplyHooks(t, a, source.Canonical{Hooks: []source.Hook{
+		{Event: "PreToolUse", Matcher: "Bash", Type: "command", Command: "echo a", Timeout: source.MaxHookTimeout},
+	}})
+
+	h := firstHandler(t, filepath.Join(tmp, ".gemini", "settings.json"), "BeforeTool")
+	wantMS := float64(int64(source.MaxHookTimeout) * 1000)
+	if got := h["timeout"]; got != wantMS {
+		t.Fatalf("MaxHookTimeout rendered as %v (%T); want %v milliseconds", got, got, wantMS)
+	}
+
+	got, err := a.Ingest(adapter.ScopeUser, "")
+	if err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+	if len(got.Hooks) != 1 {
+		t.Fatalf("expected the max timeout to re-ingest, got %+v", got.Hooks)
+	}
+	if got.Hooks[0].Timeout != source.MaxHookTimeout {
+		t.Fatalf("re-ingested timeout = %d; want %d", got.Hooks[0].Timeout, source.MaxHookTimeout)
+	}
+}
+
 // TestHookTimeout_CrossAdapterUnits is the test the review asked for, and the
 // one the original change was missing: ONE canonical timeout rendered by TWO
 // adapters, asserting the wire values differ by the 1000x the harnesses

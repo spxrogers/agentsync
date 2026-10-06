@@ -95,6 +95,8 @@ func TestParseHookTimeoutMillis(t *testing.T) {
 
 		// Sub-second values are refused, never rounded: agentsync must not
 		// silently change how long a hook may run.
+		{name: "max canonical seconds in milliseconds", raw: int64(source.MaxHookTimeout) * 1000, want: source.MaxHookTimeout, res: source.HookTimeoutOK},
+		{name: "one second past max in milliseconds", raw: int64(source.MaxHookTimeout+1) * 1000, want: 0, res: source.HookTimeoutUnrepresentable},
 		{name: "sub-second is refused not rounded", raw: 1500, want: 0, res: source.HookTimeoutUnrepresentable},
 		{name: "under a second", raw: 30, want: 0, res: source.HookTimeoutUnrepresentable},
 		{name: "explicit zero", raw: 0, want: 0, res: source.HookTimeoutUnrepresentable},
