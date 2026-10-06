@@ -339,6 +339,65 @@ func TestApply_PluginAgentsAllowlistNarrowsFanOut(t *testing.T) {
 	mustExist(t, "codex subagent", filepath.Join(tmp, ".codex", "agents", "toolkit-reviewer.toml"))
 }
 
+// TestApply_AgentsFlagKeepsSiblingSharedSkill is the --agents half of #246.
+// Codex and Pi both render a plugin skill into ~/.agents/skills. Narrowing the
+// plugin to Codex and then applying only Pi must not delete the file Codex
+// still writes. The following full apply releases Pi's state entry, so
+// status --exit-code is 0.
+func TestApply_AgentsFlagKeepsSiblingSharedSkill(t *testing.T) {
+	tmp, env := importTestEnv(t)
+	for _, name := range []string{"codex", "pi"} {
+		if out, err := runCLI(t, env, "agent", "add", name); err != nil {
+			t.Fatalf("agent add %s: %v\n%s", name, err, out)
+		}
+	}
+	mpDir := makeFanOutMarketplace(t, t.TempDir())
+	if out, err := runCLI(t, env, "marketplace", "add", mpDir); err != nil {
+		t.Fatalf("marketplace add: %v\n%s", err, out)
+	}
+	if out, err := runCLI(t, env, "plugin", "add", "toolkit"); err != nil {
+		t.Fatalf("plugin add: %v\n%s", err, out)
+	}
+	if out, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatalf("apply: %v\n%s", err, out)
+	}
+	skill := filepath.Join(tmp, ".agents", "skills", "toolkit-audit", "SKILL.md")
+	mustExist(t, "shared skill", skill)
+
+	tomlPath := filepath.Join(tmp, ".agentsync", "plugins", "toolkit.toml")
+	narrowed := strings.ReplaceAll(mustReadFile(t, tomlPath), "agents = ['*']", "agents = ['codex']")
+	if narrowed == mustReadFile(t, tomlPath) {
+		t.Fatalf("plugin toml had no agents = ['*'] to narrow:\n%s", narrowed)
+	}
+	if err := os.WriteFile(tomlPath, []byte(narrowed), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := runCLI(t, env, "apply", "--agents", "pi"); err != nil {
+		t.Fatalf("apply --agents pi: %v\n%s", err, out)
+	}
+	mustExist(t, "shared skill after narrowed apply", skill)
+
+	if out, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatalf("full apply: %v\n%s", err, out)
+	}
+	mustExist(t, "shared skill after full apply", skill)
+	if out, err := runCLI(t, env, "status", "--exit-code"); err != nil {
+		t.Fatalf("status --exit-code after a clean shared-dest apply: %v\n%s", err, out)
+	}
+	stateRaw := mustReadFile(t, filepath.Join(tmp, ".agentsync", ".state", "targets.json"))
+	var doc struct {
+		Files map[string]json.RawMessage `json:"files"`
+	}
+	if err := json.Unmarshal([]byte(stateRaw), &doc); err != nil {
+		t.Fatalf("parse state: %v", err)
+	}
+	for key := range doc.Files {
+		if strings.Contains(key, "|2:pi|") && strings.Contains(key, "toolkit-audit") {
+			t.Fatalf("pi still owns the skill codex renders; prune did not release it: %s", key)
+		}
+	}
+}
+
 // TestApply_HandAuthoredComponentsIgnoreTheAllowlist pins the boundary: the two
 // gates are properties of PLUGIN installation, so a component the user wrote
 // into ~/.agentsync/ renders everywhere regardless of any plugin's targeting.

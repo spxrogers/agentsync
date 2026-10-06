@@ -195,26 +195,25 @@ func TestPruneStaleState_AmbiguousPathPrefixKeepsLiveKey(t *testing.T) {
 func TestFilterOrphanDeletes_KeepsSharedPath(t *testing.T) {
 	home := "/Users/me"
 	shared := filepath.Join(home, ".agents", "skills", "demo", "SKILL.md")
-	dels := []adapter.FileOp{{Action: adapter.ActionDelete, Path: shared}}
+	alone := filepath.Join(home, ".agents", "skills", "gone", "SKILL.md")
+	// shared is dropped and alone is kept. A one-element input cannot tell an
+	// in-place filter from a fresh slice: nothing is written back into the
+	// dropped slot. Two elements, with the survivor second, do.
+	dels := []adapter.FileOp{
+		{Action: adapter.ActionDelete, Path: shared},
+		{Action: adapter.ActionDelete, Path: alone},
+	}
 	keep := render.NewSharedDests(render.RenderPlan{
 		PerAgent: map[string]render.AgentResult{
 			"codex": {Ops: []adapter.FileOp{{Action: adapter.ActionWrite, Path: shared, Content: []byte("x")}}},
 		},
 	}, home)
 	got := keep.FilterDeletes(dels)
-	if len(got) != 0 {
-		t.Fatalf("a dest another agent still writes must not be deleted: %+v", got)
-	}
-	// FilterDeletes must not scribble on the caller's slice: both call sites
-	// read `dels` again afterwards, and an in-place filter would truncate it
-	// under them.
-	if len(dels) != 1 || dels[0].Path != shared {
-		t.Fatalf("FilterDeletes mutated its input: %+v", dels)
-	}
-	alone := filepath.Join(home, ".agents", "skills", "gone", "SKILL.md")
-	got = keep.FilterDeletes([]adapter.FileOp{{Action: adapter.ActionDelete, Path: alone}})
 	if len(got) != 1 || got[0].Path != alone {
-		t.Fatalf("an unshared orphan must still delete: %+v", got)
+		t.Fatalf("only the unshared orphan should delete: %+v", got)
+	}
+	if len(dels) != 2 || dels[0].Path != shared || dels[1].Path != alone {
+		t.Fatalf("FilterDeletes mutated its input: %+v", dels)
 	}
 }
 

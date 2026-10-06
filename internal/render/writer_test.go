@@ -517,6 +517,61 @@ func TestRenderApply_SharedOrphanKeptWhenSiblingStillWrites(t *testing.T) {
 	}
 }
 
+// TestRenderApply_NarrowedPlanKeepsSiblingDest is the --agents half of #246.
+// The plan that apply executes contains only the agent that stopped writing
+// the shared file. Without the keep-set captured before that narrowing, the
+// orphan delete runs and the sibling's live file is gone.
+func TestRenderApply_NarrowedPlanKeepsSiblingDest(t *testing.T) {
+	tmp := t.TempDir()
+	home := filepath.Join(tmp, ".agentsync")
+	if err := os.MkdirAll(home, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	dest := filepath.Join(tmp, ".agents", "skills", "x", "SKILL.md")
+	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := []byte("shared-body")
+	if err := os.WriteFile(dest, body, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	write := adapter.FileOp{Action: adapter.ActionWrite, Path: dest, Content: body, Mode: 0o644, SourceID: "skills/x/SKILL.md"}
+	st := state.New()
+	if err := render.RecordOpsState(st, tmp, "claude", adapter.ScopeUser, "", []adapter.FileOp{write}); err != nil {
+		t.Fatal(err)
+	}
+	if err := render.RecordOpsState(st, tmp, "opencode", adapter.ScopeUser, "", []adapter.FileOp{write}); err != nil {
+		t.Fatal(err)
+	}
+	reg := adapter.NewRegistry()
+	if err := reg.Register(&fakeJSONApply{name: "claude"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.Register(&fakeJSONApply{name: "opencode"}); err != nil {
+		t.Fatal(err)
+	}
+	full := render.RenderPlan{PerAgent: map[string]render.AgentResult{
+		"claude":   {Ops: []adapter.FileOp{write}},
+		"opencode": {},
+	}}
+	// Same shape as `apply --agents opencode`: only the dropper is executed,
+	// but the keep-set still knows claude renders the file.
+	plan := full.Narrow(tmp, []string{"opencode"})
+	if _, _, _, err := render.Apply(plan, reg, st, home, tmp, adapter.ScopeUser, ""); err != nil {
+		t.Fatalf("narrowed apply: %v", err)
+	}
+	got, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatalf("shared dest was deleted by the narrowed apply: %v", err)
+	}
+	if string(got) != "shared-body" {
+		t.Fatalf("got %q", got)
+	}
+	if orphans := render.OrphanFiles(st, tmp, "opencode", adapter.ScopeUser, "", nil, render.NewSharedDests(plan, tmp)); len(orphans) != 0 {
+		t.Fatalf("status must not offer a deletion apply will not perform: %v", orphans)
+	}
+}
+
 // TestRenderApply_IntraAgentDivergenceMessage pins that the shared-write guard
 // tells the truth about WHO collided.
 //

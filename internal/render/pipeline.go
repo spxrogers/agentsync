@@ -25,6 +25,33 @@ import (
 // selected adapter. PerAgent[name] is the per-agent breakdown.
 type RenderPlan struct {
 	PerAgent map[string]AgentResult
+	// sharedKeep is the HOME-relative whole-file destinations every enabled
+	// agent still renders, including agents this plan will not write. Nil
+	// means "derive it from PerAgent", which is right when the plan contains
+	// every enabled agent. Narrow sets it so a plan limited by --agents does
+	// not orphan-delete a path an unselected sibling still writes (#246).
+	sharedKeep map[string]struct{}
+}
+
+// Narrow limits which agents this plan writes or reports, while remembering
+// every whole-file destination the receiver still renders. Orphan deletion,
+// status, diff and reconcile must not treat a path as stale just because the
+// selected agent stopped writing it when an enabled sibling still does.
+func (p RenderPlan) Narrow(userHome string, selected []string) RenderPlan {
+	keep := NewSharedDests(p, userHome).keep
+	if keep == nil {
+		keep = map[string]struct{}{}
+	}
+	out := RenderPlan{
+		PerAgent:   make(map[string]AgentResult, len(selected)),
+		sharedKeep: keep,
+	}
+	for _, name := range selected {
+		if res, ok := p.PerAgent[name]; ok {
+			out.PerAgent[name] = res
+		}
+	}
+	return out
 }
 
 type AgentResult struct {

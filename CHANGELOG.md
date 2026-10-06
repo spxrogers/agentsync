@@ -76,14 +76,14 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 - **`apply` no longer deletes a destination another enabled agent still
   writes** ([#246](https://github.com/spxrogers/agentsync/issues/246)). Orphan
   cleanup was computed per agent with no knowledge of its siblings, so with
-  Codex, Factory and agy all rendering `.agents/skills`, dropping one of them
-  could delete a skill the others still produce — delete-then-rewrite or
+  Codex and Pi both rendering `~/.agents/skills`, dropping one of them
+  could delete a skill the other still produces — delete-then-rewrite or
   delete-then-fail, depending purely on registry order. Apply now keeps any
-  path the whole plan still renders, the agent that stopped rendering it
-  releases its state entry instead of holding it forever, and `status` / `diff`
-  stop offering a deletion that will never happen (so `status --exit-code`
-  returns 0 after a clean apply, which it previously never did once a shared
-  dest was involved).
+  path any **enabled** agent still renders, including one `--agents` did not
+  select. The agent that stopped rendering it releases its state entry instead
+  of holding it forever, and `status` / `diff` stop offering a deletion that
+  will never happen (so `status --exit-code` returns 0 after a clean apply,
+  which it previously never did once a shared dest was involved).
 - **A FIFO, device or directory at a destination no longer hangs `apply`,
   `apply --dry-run`, `reconcile --auto-override`, `import <agent>` or `doctor`**
   ([#241](https://github.com/spxrogers/agentsync/issues/241),

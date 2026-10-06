@@ -39,10 +39,9 @@ type planItem struct {
 	ptr string
 
 	// orphan marks a whole-file destination owned in state that this agent no
-	// longer renders. The set is PER AGENT and UNFILTERED: a path another
-	// enabled agent still renders IS yielded (status's ownership view).
-	// reconcile applies its own cross-agent exclusion and path dedupe on top —
-	// see collectReconcileItems.
+	// longer renders AND that no enabled agent still writes. The keep-set is
+	// the plan's, so a sibling left out of --agents still protects the path.
+	// reconcile only dedupes what this walk already kept.
 	orphan bool
 
 	// cls is the CONTENT-only classification. It deliberately does NOT fold in
@@ -160,7 +159,8 @@ type planWalk struct {
 	matchOp func(agent string, op adapter.FileOp) bool
 
 	// includeOrphans appends each agent's render.OrphanFiles items AFTER that
-	// agent's op items, unfiltered (see planItem.orphan).
+	// agent's op items. OrphanFiles already drops a path any enabled agent
+	// still renders (see planItem.orphan).
 	includeOrphans bool
 
 	// withText populates srcText/dstText. It governs THOSE FIELDS ONLY:

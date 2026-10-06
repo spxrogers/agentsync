@@ -271,8 +271,9 @@ func OrphanDeletes(s *state.Targets, userHome, agent string, scope adapter.Scope
 //     entry whose delete will never run would otherwise be retained forever;
 //   - OrphanFiles omits it, so `status`/`diff` stop reporting a deletion that
 //     apply will never perform;
-//   - the apply summary's removal counts and the git-backup baseline agree
-//     with what actually happens.
+//   - the apply summary's removal counts agree with what actually happens.
+//     The git-backup baseline stays unfiltered on purpose: a kept delete is
+//     already in the plan as a write, and baselining one extra path is harmless.
 //
 // Passing the plan-derived set explicitly, rather than each caller recomputing
 // it, is what keeps those four honest with one another.
@@ -281,10 +282,15 @@ type SharedDests struct {
 	userHome string
 }
 
-// NewSharedDests collects the whole-file destinations every agent in p still
-// renders. Key-merge ops are excluded: they are owned per JSON pointer, not
-// per file, and are never orphan-deleted as whole files.
+// NewSharedDests collects the whole-file destinations every enabled agent
+// still renders. A plan produced by Narrow carries that set even when
+// PerAgent holds only the agents --agents selected; otherwise it is derived
+// from PerAgent. Key-merge ops are excluded: they are owned per JSON pointer,
+// not per file, and are never orphan-deleted as whole files.
 func NewSharedDests(p RenderPlan, userHome string) SharedDests {
+	if p.sharedKeep != nil {
+		return SharedDests{keep: p.sharedKeep, userHome: userHome}
+	}
 	keep := map[string]struct{}{}
 	for _, res := range p.PerAgent {
 		for _, op := range res.Ops {
@@ -315,13 +321,12 @@ func (d SharedDests) rendersPortable(portable string) bool {
 	return ok
 }
 
-// FilterDeletes drops deletes for paths another agent in the plan still
-// renders. apply, the removal counts, and the git-backup baseline all call
-// this rather than re-deriving the rule.
+// FilterDeletes drops deletes for paths another enabled agent still renders.
+// apply and the removal counts call this rather than re-deriving the rule.
+// The git-backup baseline does not: it wants every path that might change.
 //
-// The result is a fresh slice: filtering in place over the caller's backing
-// array is a surprising side effect in an exported API, and both call sites
-// pass a slice they also read.
+// The result is a fresh slice. Filtering in place over the caller's backing
+// array is a surprising side effect in an exported API.
 func (d SharedDests) FilterDeletes(dels []adapter.FileOp) []adapter.FileOp {
 	if len(d.keep) == 0 {
 		return dels

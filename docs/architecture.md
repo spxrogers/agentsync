@@ -1048,7 +1048,14 @@ run itself continues, because a lingering orphan is not data loss while a failed
 apply would wedge every other agent's writes. A skipped delete is **retried**:
 `PruneStaleState` keeps the state entry for a reclaimable destination that is
 still on disk, so the next apply tries again and warns again rather than
-forgetting the file forever. Empty-directory pruning applies to **skills
+forgetting the file forever. A path another **enabled** agent still renders
+is not an orphan at all: `RenderPlan.Narrow` keeps that set even when
+`--agents` writes only one agent, `apply` skips the delete, and
+`PruneStaleState` releases the dropping agent's state entry so `status` does
+not keep offering a deletion that will never run. The keep-set is every
+enabled agent, not only the selected ones — otherwise
+`apply --agents <dropper>` deletes a file the unselected sibling still writes.
+Empty-directory pruning applies to **skills
 only** — a skill is a directory under the Agent Skills spec, so removal must
 reclaim the whole tree, pruned up to but never including the agent's skills root;
 subagents and commands are flat files in a directory the agent always owns.
@@ -1084,8 +1091,8 @@ fold permission drift into the class of a content-clean whole file — measured
 against `op.Mode`, the mode the next apply chmods to, which is the same question
 `diff`'s `mode` hunk asks (`planItem.opModeDrifted`, one predicate behind all
 three, so they cannot disagree). `reconcile` still ignores mode entirely; that gap is
-#245. `diff` masks and compares text, `reconcile` excludes
-an orphan another agent still renders, `explain` groups by owner.
+#245. `diff` masks and compares text, `reconcile` dedupes the orphans the walk
+already excluded (a path any enabled agent still renders), `explain` groups by owner.
 
 A **symlinked** destination is read through only when
 `AGENTSYNC_ALLOW_SYMLINK_DEST=1` — the same switch under which `iox.AtomicWrite`

@@ -117,10 +117,11 @@ func diffRun(cmd *cobra.Command, args []string, o diffOpts) error {
 	// resolved cleartext separately, below); wrap as a render-only
 	// Resolved without substituting so it works even when the secrets
 	// backend is locked.
-	plan, err := render.Plan(secrets.ForRender(c), reg, selected, sc, projectRoot, s, userHome)
+	full, err := render.Plan(secrets.ForRender(c), reg, enabledAgents, sc, projectRoot, s, userHome)
 	if err != nil {
 		return err
 	}
+	plan := full.Narrow(userHome, selected)
 
 	// Build the secret-redaction map BEFORE diffing. The
 	// destination file was written by a prior apply with secrets
