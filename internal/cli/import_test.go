@@ -1304,7 +1304,8 @@ func TestImportApply_HookTimeoutRoundTrip(t *testing.T) {
 			if len(hooks) != 1 {
 				t.Fatalf("canonical hooks = %#v, want one [[hook]]", hooks)
 			}
-			if got := hooks[0].(map[string]any)["timeout"]; got != int64(45) {
+			entry, _ := hooks[0].(map[string]any)
+			if got := entry["timeout"]; got != int64(45) {
 				t.Fatalf("canonical timeout = %#v, want 45 (seconds)", got)
 			}
 			want, err := os.ReadFile(canonical)
