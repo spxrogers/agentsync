@@ -18,12 +18,16 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   refused by `import` and could not be brought under management at all.
   The canonical unit is always **whole seconds** — **Gemini CLI's native field
   counts milliseconds**, and its adapter converts in both directions so you
-  still write seconds once. A native value agentsync cannot carry (negative,
-  fractional, or an explicit `0`, which is indistinguishable from "no timeout")
-  leaves the event uncaptured with a warning instead of being rounded or
-  silently dropped, and a bad `timeout` in your own canonical source now fails
-  the load with a message naming the file rather than disappearing at render.
-  Plugin-provided hooks carry their timeout through projection too.
+  still write seconds once. Timeouts are capped at `MaxInt32/1000` seconds
+  (~24.8 days), so every value agentsync writes into Gemini's millisecond field
+  reads back as the same number. A native value agentsync cannot carry
+  (negative, fractional, past the cap, or an explicit `0`, which is
+  indistinguishable from "no timeout") leaves the event uncaptured with a
+  warning instead of being rounded or silently dropped, and a bad `timeout` in
+  your own canonical source now fails the load with a message naming the file
+  rather than disappearing at render. Plugin-provided hooks carry their timeout
+  through projection too; one agentsync cannot carry is dropped with a warning
+  so a third-party manifest can't make itself unloadable.
 - **Dedicated Grok Build adapter** (`agentsync agent add grok`) with user/project
   instructions, complete skill directories, legacy Markdown commands, TOML MCP,
   and JSON command hooks. Includes detection, `GROK_HOME`, import/reconcile,
@@ -63,12 +67,6 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Fixed
 
-- **A large hook timeout no longer makes Gemini import delete the shared hook file.**
-  The canonical ceiling is `MaxInt32/1000` seconds (~24.8 days), checked after
-  Gemini's millisecond conversion rather than against the raw native number.
-  Every timeout agentsync can write is one it can read back. A larger value
-  fails the load instead of rendering a figure import treats as unmodelable
-  and then retires `hooks/<event>.toml` for every agent.
 - **Numbers in Codex's `config.toml` no longer render as strings.** `MergeTOML`
   passed `json.Number` values through to the TOML encoder, which marshaled them
   as quoted strings — so an MCP server's `startup_timeout_sec = 10` came back as

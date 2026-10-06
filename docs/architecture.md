@@ -71,7 +71,10 @@ re-ingests as the same canonical value. A canonical timeout outside the
 representable range fails the load (`loadHooks`) instead of being silently
 dropped at render, and a native one outside it is refused as *unmodelable*
 rather than *malformed* — the distinction that decides whether import retires
-the stale canonical file (§ hook retirement below).
+the stale canonical file (§ hook retirement below). A plugin manifest's timeout
+outside it is the deliberate exception: `pluginHookTimeout` logs a warning and
+projects the hook without it, because a third-party manifest must not be able
+to make itself unloadable.
 
 At **project scope** the same canonical is loaded a second time from the repo's
 `<root>/.agentsync/` tree (identical layout) and overlaid onto the user canonical

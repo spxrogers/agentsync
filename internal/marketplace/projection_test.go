@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/spxrogers/agentsync/internal/marketplace"
+	"github.com/spxrogers/agentsync/internal/source"
 )
 
 func TestProject_StrictPluginJSON(t *testing.T) {
@@ -594,6 +595,45 @@ func TestProject_Hooks_UnrepresentableTimeoutIsDropped(t *testing.T) {
 		if h.Timeout != 0 {
 			t.Errorf("%s: timeout = %d, want 0 (dropped)", h.Command, h.Timeout)
 		}
+	}
+}
+
+// TestProject_Hooks_TimeoutCeiling pins pluginHookTimeout's MaxHookTimeout
+// check. HookTimeoutNumber deliberately leaves the canonical ceiling to its
+// callers, so without this check a plugin timeout past the cap would project,
+// render into Gemini as a millisecond figure import cannot read back, and
+// retire the shared hooks/<event>.toml on the next import.
+func TestProject_Hooks_TimeoutCeiling(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		timeout int
+		want    int
+	}{
+		{name: "at the cap projects", timeout: source.MaxHookTimeout, want: source.MaxHookTimeout},
+		{name: "past the cap is dropped", timeout: source.MaxHookTimeout + 1, want: 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cache := t.TempDir()
+			if err := os.MkdirAll(filepath.Join(cache, ".claude-plugin"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			manifest := `{"name":"p","hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[` +
+				`{"type":"command","command":"a.sh","timeout":` + strconv.Itoa(tc.timeout) + `}]}]}}`
+			if err := os.WriteFile(filepath.Join(cache, ".claude-plugin", "plugin.json"), []byte(manifest), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			pr, err := marketplace.Project(marketplace.PluginEntry{Name: "p"}, cache)
+			if err != nil {
+				t.Fatalf("Project: %v", err)
+			}
+			if len(pr.Hooks) != 1 {
+				t.Fatalf("hooks = %d, want 1 (the command projects either way)", len(pr.Hooks))
+			}
+			if got := pr.Hooks[0].Timeout; got != tc.want {
+				t.Errorf("timeout = %d, want %d", got, tc.want)
+			}
+		})
 	}
 }
 

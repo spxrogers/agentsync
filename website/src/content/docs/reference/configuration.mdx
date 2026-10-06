@@ -147,7 +147,7 @@ source) and is on unless you set `banner = false`. See the
 | `lsp/<name>.toml` | one LSP server |
 | `subagents/<name>.md` | one subagent (the directory is `subagents/`, not `agents/` — `agents` names the harness registry in `agentsync.toml`) |
 | `commands/<name>.md` | one slash command |
-| `hooks/<event>.toml` | one hook |
+| `hooks/<event>.toml` | one hook event — each `[[hook]]` takes `matcher`/`type`/`command` plus an optional `timeout` in whole seconds (omit or `0` for none; Gemini's millisecond field is converted for you) |
 | `marketplaces/<name>.toml` | one marketplace ([guide](/guides/plugins/)) |
 | `plugins/<id>.toml` | one plugin enablement ([guide](/guides/plugins/)) |
 | `memory/AGENTS.md` + `fragments/` | canonical memory ([guide](/guides/memory/)) |

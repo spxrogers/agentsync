@@ -19,7 +19,7 @@ import (
 // only by per-adapter tables). For every registered adapter implementing the
 // guard, it renders a canonical command hook into the adapter's own native
 // file, asserts a clean render refuses nothing, then enriches every emitted
-// handler object with an unmodeled "timeout" and asserts the refusal
+// handler object with an unmodeled "statusMessage" and asserts the refusal
 // surfaces as exactly ["PreToolUse"] — a renaming adapter that reported its
 // native spelling (preToolUse, BeforeTool) fails the equality.
 //
