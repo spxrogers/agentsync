@@ -519,8 +519,8 @@ func TestRenderApply_SharedOrphanKeptWhenSiblingStillWrites(t *testing.T) {
 
 // TestRenderApply_NarrowedPlanKeepsSiblingDest is the --agents half of #246.
 // The plan that apply executes contains only the agent that stopped writing
-// the shared file. Without the keep-set captured before that narrowing, the
-// orphan delete runs and the sibling's live file is gone.
+// the shared file. claude is left out of the run but owns the file in state,
+// so the orphan delete must not run and the file must survive.
 func TestRenderApply_NarrowedPlanKeepsSiblingDest(t *testing.T) {
 	tmp := t.TempDir()
 	home := filepath.Join(tmp, ".agentsync")
@@ -550,13 +550,12 @@ func TestRenderApply_NarrowedPlanKeepsSiblingDest(t *testing.T) {
 	if err := reg.Register(&fakeJSONApply{name: "opencode"}); err != nil {
 		t.Fatal(err)
 	}
-	full := render.RenderPlan{PerAgent: map[string]render.AgentResult{
-		"claude":   {Ops: []adapter.FileOp{write}},
+	// Same shape as `apply --agents opencode`: only the dropper is rendered
+	// and executed. claude is not rendered at all; its state entry is what
+	// protects the file.
+	plan := render.RenderPlan{PerAgent: map[string]render.AgentResult{
 		"opencode": {},
-	}}
-	// Same shape as `apply --agents opencode`: only the dropper is executed,
-	// but the keep-set still knows claude renders the file.
-	plan := full.Narrow(tmp, []string{"opencode"})
+	}}.WithSiblingOwners(st, tmp, adapter.ScopeUser, "", []string{"claude"})
 	if _, _, _, err := render.Apply(plan, reg, st, home, tmp, adapter.ScopeUser, ""); err != nil {
 		t.Fatalf("narrowed apply: %v", err)
 	}

@@ -130,10 +130,11 @@ func runApplyPipeline(cmd *cobra.Command, home string, o applyOpts) error {
 	}
 
 	allEnabled, enabled := enabledAgentNames(c.Config)
-	// --agents narrows WHICH agents are written, not which agents still own a
-	// shared destination. The plan below is rendered for every enabled agent
-	// and then Narrow'd, so an unselected sibling keeps a path the selected
-	// agent stopped writing (#246).
+	// --agents narrows the apply to a validated allowlist, with the SAME parsing
+	// status/diff use (#200 F10). Applied after the enabled set is built, so an
+	// unknown or disabled name is rejected rather than silently rendering nothing.
+	// Only the selected agents are rendered; the ones left out are consulted
+	// through state (siblings, below) so a path they own is not reclaimed (#246).
 	agents := allEnabled
 	if len(allEnabled) > 0 {
 		sel, aerr := selectAgents(cmd, allEnabled, enabled, o.agentsCSV)
@@ -142,6 +143,7 @@ func runApplyPipeline(cmd *cobra.Command, home string, o applyOpts) error {
 		}
 		agents = sel
 	}
+	siblings := agentsLeftOut(allEnabled, agents)
 	if len(agents) == 0 {
 		// Without this hint, `apply` prints "applied: 0 ops" and a
 		// new user assumes their config "worked". Tell them how to
@@ -168,11 +170,11 @@ func runApplyPipeline(cmd *cobra.Command, home string, o applyOpts) error {
 	}
 
 	if o.dryRun {
-		full, err := render.Plan(resolved, reg, allEnabled, sc, projectRoot, s, userHome)
+		plan, err := render.Plan(resolved, reg, agents, sc, projectRoot, s, userHome)
 		if err != nil {
 			return err
 		}
-		plan := full.Narrow(userHome, agents)
+		plan = plan.WithSiblingOwners(s, userHome, sc, projectRoot, siblings)
 		// Run the pipeline through non-writing preview writers so we know, per
 		// destination, whether the real apply would actually change it (and back
 		// up any foreign content first) or find it already in sync. Without this
@@ -238,11 +240,11 @@ func runApplyPipeline(cmd *cobra.Command, home string, o applyOpts) error {
 	// Real apply: render + write. The writer constructed inside
 	// render.Apply enforces the foreign-collision backup invariant on
 	// every destination write — there is no separate guard pass.
-	full, err := render.Plan(resolved, reg, allEnabled, sc, projectRoot, s, userHome)
+	plan, err := render.Plan(resolved, reg, agents, sc, projectRoot, s, userHome)
 	if err != nil {
 		return err
 	}
-	plan := full.Narrow(userHome, agents)
+	plan = plan.WithSiblingOwners(s, userHome, sc, projectRoot, siblings)
 
 	// Count convergence-time removals NOW, before PruneStaleState drops the
 	// state entries OrphanDeletes reads — so the summary can report

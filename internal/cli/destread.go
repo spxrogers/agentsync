@@ -61,9 +61,12 @@ func pathlessErr(err error) error {
 // ReadDirOptional. That closed the remaining hangs in `apply`,
 // `apply --dry-run`, `reconcile --auto-override`, `import <agent>` and
 // `doctor` (which reaches a destination through claude.IngestPlugins) — #241
-// and #242. TestCommandsDoNotHangOnNonRegularDestination covers the claude
-// destinations that fixture places; the other adapters are covered by their
-// own ReadFileOptional rows, not by that one test.
+// and #242. TestCommandsDoNotHangOnNonRegularDestination drives those commands
+// end to end, but only against the claude destinations its fixture places.
+// For every other adapter the guarantee rests on two things: each Ingest read
+// calls adapter.ReadFileOptional, and TestReadFileOptional_FIFODoesNotBlock
+// pins that helper. There is no per-adapter FIFO row, so an adapter that went
+// back to a bare os.ReadFile would not be caught by a test today.
 //
 // Three things to know about the shape check:
 //

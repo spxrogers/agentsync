@@ -372,6 +372,23 @@ func TestApply_AgentsFlagKeepsSiblingSharedSkill(t *testing.T) {
 	if err := os.WriteFile(tomlPath, []byte(narrowed), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	// Pi no longer renders the skill and Codex is left out of these runs, but
+	// Codex owns it in state. No --agents pi surface may offer it as an orphan:
+	// status would report a deletion, the dry run would preview one, and
+	// reconcile would prompt to remove a file Codex still depends on.
+	for _, args := range [][]string{
+		{"status", "--agents", "pi"},
+		{"apply", "--dry-run", "--agents", "pi"},
+		{"reconcile", "--auto-safe", "--agents", "pi"},
+	} {
+		out, err := runCLI(t, env, args...)
+		if err != nil {
+			t.Fatalf("%s: %v\n%s", strings.Join(args, " "), err, out)
+		}
+		if strings.Contains(out, "toolkit-audit") {
+			t.Errorf("%s offered the skill Codex still owns:\n%s", strings.Join(args, " "), out)
+		}
+	}
 	if out, err := runCLI(t, env, "apply", "--agents", "pi"); err != nil {
 		t.Fatalf("apply --agents pi: %v\n%s", err, out)
 	}
@@ -395,6 +412,105 @@ func TestApply_AgentsFlagKeepsSiblingSharedSkill(t *testing.T) {
 		if strings.Contains(key, "|2:pi|") && strings.Contains(key, "toolkit-audit") {
 			t.Fatalf("pi still owns the skill codex renders; prune did not release it: %s", key)
 		}
+	}
+}
+
+// TestAgentsFlag_UnselectedAgentRenderErrorDoesNotFailTheRun pins that
+// --agents renders only the agents it names. An earlier keep-set rendered every
+// enabled agent to learn what they write, so one agent's render error failed
+// every --agents run — including `status`, the diagnostic you reach for when
+// that agent is the one misbehaving.
+func TestAgentsFlag_UnselectedAgentRenderErrorDoesNotFailTheRun(t *testing.T) {
+	tmp, env := importTestEnv(t)
+	if out, err := runCLI(t, env, "agent", "add", "codex"); err != nil {
+		t.Fatalf("agent add codex: %v\n%s", err, out)
+	}
+	// Two subagents that resolve to one Codex agent name. Codex's renderer
+	// refuses that rather than overwrite one of them; Claude names its files by
+	// stem and renders both without complaint.
+	subDir := filepath.Join(tmp, ".agentsync", "subagents")
+	if err := os.MkdirAll(subDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, stem := range []string{"first", "second"} {
+		body := "---\nname: dup\ndescription: " + stem + "\n---\nBody.\n"
+		if err := os.WriteFile(filepath.Join(subDir, stem+".md"), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Anti-vacuity: the fixture must actually break Codex, or every row below
+	// passes for the wrong reason.
+	if out, err := runCLI(t, env, "status"); err == nil || !strings.Contains(err.Error()+out, "dup") {
+		t.Fatalf("fixture must make codex fail to render; status err=%v\n%s", err, out)
+	}
+
+	for _, args := range [][]string{
+		{"apply", "--dry-run", "--agents", "claude"},
+		{"apply", "--agents", "claude"},
+		{"status", "--agents", "claude"},
+		{"diff", "--agents", "claude"},
+		{"reconcile", "--auto-safe", "--agents", "claude"},
+	} {
+		if out, err := runCLI(t, env, args...); err != nil {
+			t.Errorf("%s must not render codex, so codex's error must not fail it: %v\n%s",
+				strings.Join(args, " "), err, out)
+		}
+	}
+	mustExist(t, "claude subagent", filepath.Join(tmp, ".claude", "agents", "first.md"))
+}
+
+// TestAgentsFlag_NeverAppliedSiblingDoesNotOrphanAFile pins that the keep-set
+// is OWNERSHIP, not "some agent would render this". Pi owns a plugin skill.
+// Codex is added but never applied, so it owns nothing. Narrowing the plugin to
+// Codex and applying only Pi must reclaim the skill, exactly as before #246:
+// releasing Pi's entry on Codex's behalf would leave a file no state entry
+// tracks, and once Codex is disabled it would sit on disk forever with
+// `status --exit-code` reporting clean.
+func TestAgentsFlag_NeverAppliedSiblingDoesNotOrphanAFile(t *testing.T) {
+	tmp, env := importTestEnv(t)
+	if out, err := runCLI(t, env, "agent", "add", "pi"); err != nil {
+		t.Fatalf("agent add pi: %v\n%s", err, out)
+	}
+	mpDir := makeFanOutMarketplace(t, t.TempDir())
+	if out, err := runCLI(t, env, "marketplace", "add", mpDir); err != nil {
+		t.Fatalf("marketplace add: %v\n%s", err, out)
+	}
+	if out, err := runCLI(t, env, "plugin", "add", "toolkit"); err != nil {
+		t.Fatalf("plugin add: %v\n%s", err, out)
+	}
+	if out, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatalf("apply: %v\n%s", err, out)
+	}
+	skill := filepath.Join(tmp, ".agents", "skills", "toolkit-audit", "SKILL.md")
+	mustExist(t, "pi's skill", skill)
+
+	if out, err := runCLI(t, env, "agent", "add", "codex"); err != nil {
+		t.Fatalf("agent add codex: %v\n%s", err, out)
+	}
+	tomlPath := filepath.Join(tmp, ".agentsync", "plugins", "toolkit.toml")
+	narrowed := strings.ReplaceAll(mustReadFile(t, tomlPath), "agents = ['*']", "agents = ['codex']")
+	if narrowed == mustReadFile(t, tomlPath) {
+		t.Fatalf("plugin toml had no agents = ['*'] to narrow:\n%s", narrowed)
+	}
+	if err := os.WriteFile(tomlPath, []byte(narrowed), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if out, err := runCLI(t, env, "apply", "--agents", "pi"); err != nil {
+		t.Fatalf("apply --agents pi: %v\n%s", err, out)
+	}
+	mustNotExist(t, "skill only a never-applied agent would render", skill)
+
+	if out, err := runCLI(t, env, "agent", "disable", "codex"); err != nil {
+		t.Fatalf("agent disable codex: %v\n%s", err, out)
+	}
+	if out, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatalf("apply: %v\n%s", err, out)
+	}
+	mustNotExist(t, "skill after codex is disabled", skill)
+	if out, err := runCLI(t, env, "status", "--exit-code"); err != nil {
+		t.Fatalf("status --exit-code: %v\n%s", err, out)
 	}
 }
 

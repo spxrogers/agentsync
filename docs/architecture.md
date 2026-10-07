@@ -1048,13 +1048,21 @@ run itself continues, because a lingering orphan is not data loss while a failed
 apply would wedge every other agent's writes. A skipped delete is **retried**:
 `PruneStaleState` keeps the state entry for a reclaimable destination that is
 still on disk, so the next apply tries again and warns again rather than
-forgetting the file forever. A path another **enabled** agent still renders
-is not an orphan at all: `RenderPlan.Narrow` keeps that set even when
-`--agents` writes only one agent, `apply` skips the delete, and
-`PruneStaleState` releases the dropping agent's state entry so `status` does
-not keep offering a deletion that will never run. The keep-set is every
-enabled agent, not only the selected ones — otherwise
-`apply --agents <dropper>` deletes a file the unselected sibling still writes.
+forgetting the file forever. A path another agent **holds** is not an orphan
+at all (#246): `apply` skips the delete, and `PruneStaleState` releases the
+dropping agent's state entry so `status` does not keep offering a deletion that
+will never run. "Holds" means one of two things, collected into
+`render.SharedDests`: an agent in this run's plan writes the path, or an
+enabled agent that `--agents` left out of the run already owns it in state
+(`RenderPlan.WithSiblingOwners` — the same rule `agent disable --purge` uses to
+keep a shared file). Two consequences are deliberate. Unselected agents are
+**not rendered**, so one of them failing to render cannot fail an `--agents`
+run, including `status`. And the test is **ownership, not "would render"**: an
+agent that has never applied owns nothing, so it cannot keep a path alive on
+another agent's behalf — otherwise the dropper releases its entry, nothing
+tracks the file, and once that agent is disabled it is never reclaimed. Only
+agents absent from the run are read from state; a full apply reads none, so an
+entry every agent has stopped rendering is still reclaimed.
 Empty-directory pruning applies to **skills
 only** — a skill is a directory under the Agent Skills spec, so removal must
 reclaim the whole tree, pruned up to but never including the agent's skills root;

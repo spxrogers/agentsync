@@ -506,11 +506,13 @@ symmetric with the dest→source write boundary (see architecture §7).
 - **Key:** `Plan`; `Apply`; `PreviewApply` (dry-run: collision preview +
   synced/would-change verdict); `Writer`
   (`NewWriter`/`NewPreviewWriter`); `TranslationReport` (`PrintText`/`PrintJSON`);
-  `BuildReport`; `RecordOpsState`; `PruneStaleState`; `RenderPlan.Narrow`;
-  `NewSharedDests` (whole-file destinations every enabled agent still renders,
-  including agents `--agents` did not select);
+  `BuildReport`; `RecordOpsState`; `PruneStaleState`;
+  `RenderPlan.WithSiblingOwners` (records what enabled agents left out of an
+  `--agents` run own in state, without rendering them); `NewSharedDests`
+  (whole-file destinations another agent holds: written this run, or owned by
+  an agent left out of it);
   `BackupFile`/`PruneBackups`; `CollisionReport`; and the orphan-reclamation
-  trio — `OrphanFiles` (what state owns but no enabled agent still renders),
+  trio — `OrphanFiles` (what state owns but no other agent holds),
   `OrphanDeletes` (the per-agent deletes, filtered through `SharedDests` before
   apply performs them), `OrphanIsReclaimable` (is
   this component KIND reclaimed at all — drives reconcile's prompt wording) and

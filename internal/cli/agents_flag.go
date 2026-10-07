@@ -60,6 +60,28 @@ func selectAgents(cmd *cobra.Command, enabledAgents []string, enabled map[string
 	return resolveAgentFilter(names, enabled)
 }
 
+// agentsLeftOut returns the enabled agents --agents did not select, in enabled
+// order. Their state is what render.RenderPlan.WithSiblingOwners reads so an
+// --agents run does not delete or report as stale a path one of them owns
+// (#246). They are NOT rendered: an agent the user did not ask about must not
+// be able to fail the run. Empty when every enabled agent is selected.
+func agentsLeftOut(enabled, selected []string) []string {
+	if len(selected) >= len(enabled) {
+		return nil
+	}
+	in := make(map[string]bool, len(selected))
+	for _, name := range selected {
+		in[name] = true
+	}
+	var out []string
+	for _, name := range enabled {
+		if !in[name] {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
 // enabledAgentNames answers "which agents is this run allowed to touch" in the
 // exact pair selectAgents takes: the enabled names as a slice, and the same set
 // as a membership map for the --agents allowlist check.

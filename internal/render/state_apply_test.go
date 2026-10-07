@@ -217,6 +217,88 @@ func TestFilterOrphanDeletes_KeepsSharedPath(t *testing.T) {
 	}
 }
 
+// TestWithSiblingOwners pins the ownership rule behind the --agents keep-set.
+// Each row is one way the rule can go wrong.
+func TestWithSiblingOwners(t *testing.T) {
+	testenv.RequireContainer(t)
+	home := t.TempDir()
+	shared := filepath.Join(home, ".agents", "skills", "demo", "SKILL.md")
+	// The file is on disk in every row, as it is in the real scenario. That
+	// matters for the release assertion: with the file present, the
+	// reclaimable arm retains pi's entry unless the keep-set releases it.
+	if err := os.MkdirAll(filepath.Dir(shared), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(shared, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	key := func(agent string) state.Key { return state.NewFileKey(home, agent, "user", "", shared) }
+	entry := state.FileEntry{SHA256: "abc", SourceID: "skills/demo/SKILL.md"}
+
+	tests := []struct {
+		name     string
+		owners   []string // agents holding a state entry for the path
+		inRun    []string // agents rendered this run (none of them write the path)
+		siblings []string // enabled agents --agents left out
+		wantKeep bool
+	}{
+		{
+			name:   "an unselected agent that owns the path keeps it",
+			owners: []string{"pi", "codex"}, inRun: []string{"pi"}, siblings: []string{"codex"},
+			wantKeep: true,
+		},
+		{
+			// "codex would render this" is not ownership. Releasing pi's entry
+			// on behalf of an agent that never applied leaves the file tracked
+			// by nobody, and once codex is disabled it is never reclaimed.
+			name:   "an unselected agent that never applied owns nothing",
+			owners: []string{"pi"}, inRun: []string{"pi"}, siblings: []string{"codex"},
+			wantKeep: false,
+		},
+		{
+			// The trap: on a full apply nobody is left out, so an agent's OWN
+			// stale entry must not count as a sibling's ownership. If it did, a
+			// path every agent stopped rendering would be kept forever.
+			name:   "a full run reads no state",
+			owners: []string{"pi", "codex"}, inRun: []string{"pi", "codex"}, siblings: nil,
+			wantKeep: false,
+		},
+		{
+			name:   "a sibling that is also in the run is judged by its ops, not its state",
+			owners: []string{"pi", "codex"}, inRun: []string{"pi", "codex"}, siblings: []string{"codex"},
+			wantKeep: false,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			st := state.New()
+			for _, a := range tc.owners {
+				st.Files[key(a)] = entry
+			}
+			run := render.RenderPlan{PerAgent: map[string]render.AgentResult{}}
+			for _, a := range tc.inRun {
+				run.PerAgent[a] = render.AgentResult{}
+			}
+			plan := run.WithSiblingOwners(st, home, adapter.ScopeUser, "", tc.siblings)
+			if got := render.NewSharedDests(plan, home).Keeps(shared); got != tc.wantKeep {
+				t.Fatalf("Keeps = %v, want %v", got, tc.wantKeep)
+			}
+
+			// The release must follow the keep decision exactly, or the file
+			// either stays reported forever or ends up with no owner.
+			render.PruneStaleState(st, home, "pi", adapter.ScopeUser, "", nil, render.NewSharedDests(plan, home))
+			_, piStillOwns := st.Files[key("pi")]
+			if tc.wantKeep && piStillOwns {
+				t.Error("pi stopped rendering a path another agent owns; its entry must be released")
+			}
+			if !tc.wantKeep && !piStillOwns {
+				t.Error("no other agent owns the path, so pi must keep its entry until the delete runs; " +
+					"releasing it here leaves a file nothing tracks")
+			}
+		})
+	}
+}
+
 // TestSharedDest_DroppingAgentReleasesStateAndStopsReportingOrphan is the
 // regression for the half of #246 the first pass missed. Keeping the file is
 // necessary but not sufficient: the agent that STOPPED rendering it also has to

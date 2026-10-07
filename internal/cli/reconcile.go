@@ -370,8 +370,9 @@ func newReconcileSession(cmd *cobra.Command, in io.Reader, auto reconcileAuto, a
 	}
 	reg := registryFactory()
 	allEnabled, enabled := enabledAgentNames(c.Config)
-	// --agents narrows which agents are prompted, not which destinations an
-	// enabled sibling still renders. Plan the full set, then Narrow.
+	// --agents narrows the pass, with the same parsing status/diff/apply use.
+	// Only the selected agents are rendered; a path an unselected agent owns
+	// in state is still never offered as an orphan (#246).
 	agents := allEnabled
 	if len(allEnabled) > 0 {
 		sel, aerr := selectAgents(cmd, allEnabled, enabled, agentsCSV)
@@ -382,11 +383,11 @@ func newReconcileSession(cmd *cobra.Command, in io.Reader, auto reconcileAuto, a
 	}
 	// reconcile hashes the rendered TEMPLATED source for drift; wrap as a
 	// render-only Resolved without substituting (no backend needed).
-	full, err := render.Plan(secrets.ForRender(c), reg, allEnabled, sc, projectRoot, st, userHome)
+	plan, err := render.Plan(secrets.ForRender(c), reg, agents, sc, projectRoot, st, userHome)
 	if err != nil {
 		return nil, nil, err
 	}
-	plan := full.Narrow(userHome, agents)
+	plan = plan.WithSiblingOwners(st, userHome, sc, projectRoot, agentsLeftOut(allEnabled, agents))
 
 	// Collect all items in order, then append orphaned whole-file dests
 	// (owned in state, no longer rendered) for interactive delete/keep.
@@ -928,10 +929,10 @@ func pluginOwnerForKeyItem(sourceID, ptr string, owners map[string]string) strin
 // pluginOwners (pluginProvidedSourceIDs) tags each item whose component comes
 // from a plugin, so write-back can refuse it.
 //
-// The walk already drops a path any enabled agent still renders (the plan's
-// shared-dest keep-set, which includes siblings --agents did not select).
-// Reconcile only dedupes what remains, so a file owned by two agents is
-// prompted once.
+// The walk already drops a path another agent holds (the plan's shared-dest
+// keep-set: this run's writes plus what agents --agents left out own in
+// state). Reconcile only dedupes what remains, so a file owned by two agents
+// is prompted once.
 func collectReconcileItems(plan render.RenderPlan, reg *adapter.Registry, s *state.Targets, sc adapter.Scope, projectRoot, userHome string, pluginOwners map[string]string) (items, orphans []reconcileItem) {
 	seen := map[string]bool{}
 	walk := planWalk{

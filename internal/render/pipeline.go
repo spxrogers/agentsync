@@ -25,33 +25,57 @@ import (
 // selected adapter. PerAgent[name] is the per-agent breakdown.
 type RenderPlan struct {
 	PerAgent map[string]AgentResult
-	// sharedKeep is the HOME-relative whole-file destinations every enabled
-	// agent still renders, including agents this plan will not write. Nil
-	// means "derive it from PerAgent", which is right when the plan contains
-	// every enabled agent. Narrow sets it so a plan limited by --agents does
-	// not orphan-delete a path an unselected sibling still writes (#246).
-	sharedKeep map[string]struct{}
+	// siblingOwned is the HOME-relative whole-file destinations that enabled
+	// agents LEFT OUT of this run (by --agents) already own in state. Nil for a
+	// run over every enabled agent. Set only by WithSiblingOwners.
+	siblingOwned map[string]struct{}
 }
 
-// Narrow limits which agents this plan writes or reports, while remembering
-// every whole-file destination the receiver still renders. Orphan deletion,
-// status, diff and reconcile must not treat a path as stale just because the
-// selected agent stopped writing it when an enabled sibling still does.
-func (p RenderPlan) Narrow(userHome string, selected []string) RenderPlan {
-	keep := NewSharedDests(p, userHome).keep
-	if keep == nil {
-		keep = map[string]struct{}{}
+// WithSiblingOwners records which whole-file destinations the enabled agents
+// this run did NOT select already own in state, so an --agents run neither
+// deletes nor reports as an orphan a path one of them still holds (#246).
+//
+// It reads STATE instead of rendering the unselected agents. An earlier version
+// rendered every enabled agent and then cut the plan down, which was wrong in
+// two ways:
+//
+//   - Rendering an agent the user did not ask about makes that agent's render
+//     errors fatal to the run. A codex subagent name collision aborted
+//     `status --agents claude`, the command you reach for to diagnose it.
+//   - "A sibling would render this path" is not ownership. An agent that was
+//     added but never applied owns nothing on disk, so releasing the dropper's
+//     entry on its behalf left a file no state entry tracked. Once that agent
+//     was disabled, the file stayed forever and nothing reported it.
+//
+// This is the rule purgeAgentDests already uses to keep a shared file: another
+// agent holds a state entry for it.
+//
+// Only agents ABSENT from this run count. A sibling that is also in PerAgent
+// is ignored, because its ops already say what it renders; counting its state
+// too would let an agent that stopped rendering a path keep it alive, and a
+// full apply would then never reclaim a stale-owned file.
+func (p RenderPlan) WithSiblingOwners(s *state.Targets, userHome string, scope adapter.Scope, project string, siblings []string) RenderPlan {
+	if s == nil || len(siblings) == 0 {
+		return p
 	}
-	out := RenderPlan{
-		PerAgent:   make(map[string]AgentResult, len(selected)),
-		sharedKeep: keep,
-	}
-	for _, name := range selected {
-		if res, ok := p.PerAgent[name]; ok {
-			out.PerAgent[name] = res
+	absent := make(map[string]bool, len(siblings))
+	for _, name := range siblings {
+		if _, inRun := p.PerAgent[name]; !inRun {
+			absent[name] = true
 		}
 	}
-	return out
+	if len(absent) == 0 {
+		return p
+	}
+	scopeName := scope.String()
+	portableProject := paths.HomeRelative(userHome, project)
+	owned := map[string]struct{}{}
+	for key := range s.Files {
+		if absent[key.Agent] && key.Scope == scopeName && key.Project == portableProject {
+			owned[key.Path] = struct{}{}
+		}
+	}
+	return RenderPlan{PerAgent: p.PerAgent, siblingOwned: owned}
 }
 
 type AgentResult struct {
@@ -434,8 +458,9 @@ func applyPlan(
 	seen := map[string][]byte{}
 	seenBy := map[string]string{}
 	deletedOrphans := map[string]struct{}{}
-	// Paths any enabled agent still writes this run. orphanDeletes is per-agent
-	// and would otherwise delete a shared dest a sibling still renders (#246).
+	// Paths an agent in this run writes, or an enabled agent left out of an
+	// --agents run owns in state. orphanDeletes is per-agent and would
+	// otherwise delete a shared dest another agent still holds (#246).
 	stillRendered := NewSharedDests(p, userHome)
 	for _, name := range reg.Names() {
 		res, ok := p.PerAgent[name]

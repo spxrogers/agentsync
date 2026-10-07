@@ -176,13 +176,14 @@ func newStatusCmd() *cobra.Command {
 			if resolved, serr := secrets.SubstituteCanonical(c, secBackend, secrets.EnvBackend{}); serr == nil {
 				rendered = resolved
 			}
-			full, err := render.Plan(rendered, reg, enabledAgents, sc, projectRoot, s, userHome)
+			plan, err := render.Plan(rendered, reg, selected, sc, projectRoot, s, userHome)
 			if err != nil {
 				return err
 			}
-			// Narrow keeps every enabled agent's destinations in the orphan
-			// keep-set, then reports only the selected agents.
-			plan := full.Narrow(userHome, selected)
+			// Agents --agents left out are not rendered (their errors must not
+			// fail a diagnostic run), but a path one of them owns in state is
+			// not an orphan for the selected agent either (#246).
+			plan = plan.WithSiblingOwners(s, userHome, sc, projectRoot, agentsLeftOut(enabledAgents, selected))
 
 			model := buildStatusModel(plan, reg.Names(), s, userHome, sc, projectRoot)
 			if jsonOut {
