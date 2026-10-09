@@ -11,6 +11,21 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Added
 
+- **Factory Droid hooks.** `apply` writes command hooks to `~/.factory/hooks.json`
+  and `.factory/hooks.json` (the event map at the root of the file; `timeout`
+  is seconds). Events Droid does not have, such as `PostCompact`, are skipped
+  rather than deleting the shared canonical file other agents use. A native
+  `commandRegex` or any other unmodeled field leaves that event uncaptured.
+  Import reads `hooks.json`, or the `hooks` key of `settings.json` when
+  `hooks.json` is absent. Creating `hooks.json` copies that settings object
+  first, so events agentsync does not render are not dropped when Droid stops
+  reading `settings.json`. A refused event is disowned at `/<event>`, the
+  pointer Factory's root event map records. Factory user memory renders to `~/.factory/AGENTS.md`,
+  and Factory skills use the shared `~/.agents/skills/` directory. Droid's own
+  skills directory is `.factory/skills`; it also scans `.agents/skills`. Writing
+  both would put every skill in two sources (a cross-source clash is overridden,
+  not rejected). Only the registered Factory wrapper implements hook-import
+  retirement, so the other breadth agents are not hook guards.
 - **Hook handlers can now carry a `timeout`.** Add `timeout = 30` to an entry in
   `hooks/<event>.toml` and the handler is allowed 30 seconds across Claude Code,
   Codex CLI, Cursor, Gemini CLI and Grok Build. Before this, `timeout` was a

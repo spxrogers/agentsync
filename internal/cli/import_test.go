@@ -2047,3 +2047,47 @@ func TestImport_RetireStateFailureLeavesCanonicalIntact(t *testing.T) {
 		t.Fatalf("state failure must leave the canonical hook file in place for a retry (disown-first ordering): %v\n%s", err, out)
 	}
 }
+
+// TestImport_FactoryRootPointerDisown pins that retiring a Factory event
+// clears the "/<event>" state pointer, not only "/hooks/<event>". Factory's
+// hooks.json is the event map itself. Leaving "/PreToolUse" owned made the
+// next apply's orphan cleanup delete the native commandRegex entry.
+func TestImport_FactoryRootPointerDisown(t *testing.T) {
+	tmp, env := importTestEnv(t)
+	mustRun(t, env, "agent", "add", "factory")
+	hooks := filepath.Join(tmp, ".factory", "hooks.json")
+	if err := os.MkdirAll(filepath.Dir(hooks), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	clean := `{"PreToolUse":[{"matcher":"Execute","hooks":[{"type":"command","command":"echo hi"}]}]}`
+	if err := os.WriteFile(hooks, []byte(clean), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := runCLI(t, env, "import", "factory:hook:PreToolUse"); err != nil {
+		t.Fatalf("import clean hook: %v\n%s", err, out)
+	}
+	if out, err := runCLI(t, env, "apply", "--no-git-backup"); err != nil {
+		t.Fatalf("apply: %v\n%s", err, out)
+	}
+	enriched := `{"PreToolUse":[{"matcher":"Execute","commandRegex":"^git ","hooks":[{"type":"command","command":"echo hi"}]}]}`
+	if err := os.WriteFile(hooks, []byte(enriched), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, err := runCLI(t, env, "import", "factory")
+	if err != nil {
+		t.Fatalf("re-import: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "retired canonical hooks/PreToolUse.toml") {
+		t.Fatalf("import did not retire the shared hook:\n%s", out)
+	}
+	if out, err := runCLI(t, env, "apply", "--no-git-backup"); err != nil {
+		t.Fatalf("apply after retirement: %v\n%s", err, out)
+	}
+	got, err := os.ReadFile(hooks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(got), "commandRegex") || !strings.Contains(string(got), "echo hi") {
+		t.Fatalf("orphan cleanup deleted Factory's native event:\n%s", got)
+	}
+}

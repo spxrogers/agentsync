@@ -23,7 +23,7 @@ func TestVersionRoots_AllSpecs(t *testing.T) {
 		"kiro":        {".kiro"},
 		"kilocode":    {".kilo"},
 		"amazonq":     {".aws/amazonq"},
-		"factory":     {".factory"},
+		"factory":     {".factory", ".agents/skills"},
 		"pi":          {".pi/agent", ".agents/skills"},
 		"zed":         {".config/zed", ".agents/skills"},
 		"firebase":    {},

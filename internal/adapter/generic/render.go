@@ -12,13 +12,12 @@ import (
 )
 
 // Render projects the canonical model into this breadth-tier agent's memory
-// (rules) file, its mcpServers JSON, and its Agent-Skills directory — each when
-// the spec declares a target for it. Every other component (subagents, commands,
-// hooks, LSP), and skills/MCP for a spec that declares no target, is reported as
-// a skip: the generic tier deliberately covers memory + MCP + skills only. A
-// component the spec does not support at the requested scope (e.g. user-scope
-// memory for a project-only agent) is likewise reported as a skip rather than
-// written somewhere wrong.
+// (rules) file, its mcpServers JSON, its Agent-Skills directory, and, when the
+// spec declares one, its hooks.json. Subagents, commands, and LSP are always
+// reported as skips. Hooks are a skip unless the spec declares a hooks file
+// (Factory Droid). A component the spec does not support at the requested
+// scope (e.g. user-scope memory for a project-only agent) is likewise reported
+// as a skip rather than written somewhere wrong.
 func (a *Adapter) Render(r secrets.Resolved, scope adapter.Scope, project string) ([]adapter.FileOp, []adapter.Skip, error) {
 	if err := adapter.RequireProjectRoot(scope, project); err != nil {
 		return nil, nil, err
@@ -68,6 +67,14 @@ func (a *Adapter) Render(r secrets.Resolved, scope adapter.Scope, project string
 	} else {
 		ops = append(ops, skOps...)
 		skips = append(skips, skSkips...)
+	}
+
+	// Hooks → hooks.json, only when the spec declares one (Factory Droid).
+	if hOps, hSkips, err := a.renderHooks(renderC, scope, project); err != nil {
+		return nil, nil, err
+	} else {
+		ops = append(ops, hOps...)
+		skips = append(skips, hSkips...)
 	}
 
 	// Components the breadth tier does not project — reported, never silent.
@@ -184,8 +191,10 @@ func (a *Adapter) unsupportedSkips(c source.Canonical) []adapter.Skip {
 	for _, cmd := range c.Commands {
 		skips = append(skips, adapter.Skip{Component: "command", Name: cmd.Name, Reason: reason("commands"), Kind: adapter.SkipDropped})
 	}
-	for _, h := range c.Hooks {
-		skips = append(skips, adapter.Skip{Component: "hook", Name: h.Event.String(), Reason: reason("hooks"), Kind: adapter.SkipDropped})
+	if a.spec.Hooks.User == "" && a.spec.Hooks.Project == "" {
+		for _, h := range c.Hooks {
+			skips = append(skips, adapter.Skip{Component: "hook", Name: h.Event.String(), Reason: reason("hooks"), Kind: adapter.SkipDropped})
+		}
 	}
 	for _, l := range c.LSPServers {
 		skips = append(skips, adapter.Skip{Component: "lsp", Name: l.ID, Reason: reason("LSP"), Kind: adapter.SkipDropped})

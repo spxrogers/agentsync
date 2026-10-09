@@ -87,12 +87,24 @@ func Specs() []Spec {
 			Memory: FileTarget{Project: ".amazonq/rules/agentsync.md"},
 			MCP:    MCPTarget{User: ".aws/amazonq/mcp.json", Project: ".amazonq/mcp.json"},
 		},
-		// Factory Droid — AGENTS.md; MCP `.factory/mcp.json` with explicit `type`.
+		// Factory Droid: AGENTS.md (project + personal ~/.factory/AGENTS.md, per
+		// docs.factory.ai/cli/configuration/agents-md); MCP `.factory/mcp.json`
+		// with explicit `type`. Skills use the shared `.agents/skills` dir, which
+		// Droid scans as a compatibility source next to its own `.factory/skills`
+		// (docs.factory.ai/cli/configuration/skills). Writing both would register
+		// every skill in two sources. Cross-source name clashes are overridden,
+		// not rejected; agentsync still writes only the shared directory so a
+		// machine that also enables Codex does not get two copies.
+		// Hooks are ~/.factory/hooks.json and .factory/hooks.json (event map at
+		// the root, timeout in seconds). docs.factory.ai/reference/hooks-reference.
+		// The legacy .factory/hooks/hooks.json path still loads in Droid but is
+		// not managed; the next Droid save migrates it.
 		{
 			Name: "factory", DetectBin: "droid", DetectDir: ".factory",
-			Memory: FileTarget{Project: "AGENTS.md"},
+			Memory: FileTarget{User: ".factory/AGENTS.md", Project: "AGENTS.md"},
 			MCP:    MCPTarget{User: ".factory/mcp.json", Project: ".factory/mcp.json", TransportKey: "type"},
-			Skills: FileTarget{User: ".factory/skills", Project: ".factory/skills"},
+			Skills: FileTarget{User: ".agents/skills", Project: ".agents/skills"},
+			Hooks:  FileTarget{User: ".factory/hooks.json", Project: ".factory/hooks.json"},
 		},
 		// Pi Coding Agent — AGENTS.md (project + ~/.pi/agent/AGENTS.md); MCP
 		// `~/.pi/agent/mcp.json` (inferred). No documented project MCP file.
