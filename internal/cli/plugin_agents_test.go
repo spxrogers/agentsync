@@ -377,25 +377,39 @@ func TestApply_AgentsFlagKeepsSiblingSharedSkill(t *testing.T) {
 	// status would report a deletion, the dry run would preview one, and
 	// reconcile would prompt to remove a file Codex still depends on.
 	//
-	// The dry run never prints orphan paths, only the removal counts
-	// ("Removals: 1 key(s), 1 file(s)"), so checking it for the skill name
-	// alone could never fail. A previewed file removal is the leak there; the
-	// key removal is pi's own MCP cleanup and is expected.
+	// The dry run never prints orphan paths, only the removal counts, so
+	// checking it for the skill name alone could never fail. Its removal line
+	// is pinned exactly instead: pi's own MCP cleanup is the one expected
+	// removal ("Removals: 1 key(s) (…)"), and a leaked skill delete turns it
+	// into "1 key(s), 1 file(s)". Pinning the whole line, rather than only the
+	// absence of "file(s)", keeps this row from going vacuous again if the
+	// label is ever reworded.
 	for _, tc := range []struct {
 		args  []string
-		leaks []string
+		leaks []string // must not appear
+		wants []string // must appear
 	}{
 		{args: []string{"status", "--agents", "pi"}, leaks: []string{"toolkit-audit"}},
-		{args: []string{"apply", "--dry-run", "--agents", "pi"}, leaks: []string{"toolkit-audit", "file(s)"}},
+		{
+			args:  []string{"apply", "--dry-run", "--agents", "pi"},
+			leaks: []string{"toolkit-audit", "file(s)"},
+			wants: []string{"Removals: 1 key(s) (the real apply will remove these)"},
+		},
 		{args: []string{"reconcile", "--auto-safe", "--agents", "pi"}, leaks: []string{"toolkit-audit"}},
 	} {
+		cmd := strings.Join(tc.args, " ")
 		out, err := runCLI(t, env, tc.args...)
 		if err != nil {
-			t.Fatalf("%s: %v\n%s", strings.Join(tc.args, " "), err, out)
+			t.Fatalf("%s: %v\n%s", cmd, err, out)
 		}
 		for _, leak := range tc.leaks {
 			if strings.Contains(out, leak) {
-				t.Errorf("%s offered the skill Codex still owns (found %q):\n%s", strings.Join(tc.args, " "), leak, out)
+				t.Errorf("%s offered the skill Codex still owns (found %q):\n%s", cmd, leak, out)
+			}
+		}
+		for _, want := range tc.wants {
+			if !strings.Contains(out, want) {
+				t.Errorf("%s: want %q in output:\n%s", cmd, want, out)
 			}
 		}
 	}
