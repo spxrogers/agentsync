@@ -376,17 +376,27 @@ func TestApply_AgentsFlagKeepsSiblingSharedSkill(t *testing.T) {
 	// Codex owns it in state. No --agents pi surface may offer it as an orphan:
 	// status would report a deletion, the dry run would preview one, and
 	// reconcile would prompt to remove a file Codex still depends on.
-	for _, args := range [][]string{
-		{"status", "--agents", "pi"},
-		{"apply", "--dry-run", "--agents", "pi"},
-		{"reconcile", "--auto-safe", "--agents", "pi"},
+	//
+	// The dry run never prints orphan paths, only the removal counts
+	// ("Removals: 1 key(s), 1 file(s)"), so checking it for the skill name
+	// alone could never fail. A previewed file removal is the leak there; the
+	// key removal is pi's own MCP cleanup and is expected.
+	for _, tc := range []struct {
+		args  []string
+		leaks []string
+	}{
+		{args: []string{"status", "--agents", "pi"}, leaks: []string{"toolkit-audit"}},
+		{args: []string{"apply", "--dry-run", "--agents", "pi"}, leaks: []string{"toolkit-audit", "file(s)"}},
+		{args: []string{"reconcile", "--auto-safe", "--agents", "pi"}, leaks: []string{"toolkit-audit"}},
 	} {
-		out, err := runCLI(t, env, args...)
+		out, err := runCLI(t, env, tc.args...)
 		if err != nil {
-			t.Fatalf("%s: %v\n%s", strings.Join(args, " "), err, out)
+			t.Fatalf("%s: %v\n%s", strings.Join(tc.args, " "), err, out)
 		}
-		if strings.Contains(out, "toolkit-audit") {
-			t.Errorf("%s offered the skill Codex still owns:\n%s", strings.Join(args, " "), out)
+		for _, leak := range tc.leaks {
+			if strings.Contains(out, leak) {
+				t.Errorf("%s offered the skill Codex still owns (found %q):\n%s", strings.Join(tc.args, " "), leak, out)
+			}
 		}
 	}
 	if out, err := runCLI(t, env, "apply", "--agents", "pi"); err != nil {
