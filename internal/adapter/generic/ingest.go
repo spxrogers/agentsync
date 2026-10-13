@@ -13,8 +13,8 @@ import (
 )
 
 // Ingest reads this breadth-tier agent's memory, MCP, and skills back into a
-// partial canonical. Inverse of Render (memory + MCP + skills; the components the
-// tier never projects are simply not read).
+// partial canonical, plus hooks when the spec declares a hooks file (Factory).
+// Inverse of Render. Components the tier never projects are simply not read.
 func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical, error) {
 	if err := adapter.RequireProjectRoot(scope, project); err != nil {
 		return source.Canonical{}, err
@@ -64,6 +64,14 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 		c.Skills = append(c.Skills, skills...)
 	}
 
+	if a.hooksPath(scope, project) != "" {
+		hooks, err := a.ingestHooks(scope, project)
+		if err != nil {
+			return c, err
+		}
+		c.Hooks = append(c.Hooks, hooks...)
+	}
+
 	return c, nil
 }
 
@@ -77,15 +85,12 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 // directory (permission, transient I/O) is RETURNED as an error rather than read
 // as "no skills", which drift could misclassify as the whole set being cleared.
 //
-// Per-entry deliberate no-diagnostics stance: unlike the deep adapters (which
-// thread an a.stderr() warn sink), the generic tier's Ingest has no diagnostics
-// channel, so a per-skill SKILL.md that is missing or unparseable is skipped
-// silently — exactly as this tier's MCP ingest silently skips a non-map server
-// entry. This is acknowledged (not an accidental silent drop): a stray directory
-// in a shared skills root must not break import of the rest, and the lossy case
-// is a *native* file the tier can't parse, never a canonical component the tier
-// fails to project. Threading a warn sink through the breadth-tier Ingest is a
-// deferred tier-wide change, not a skills-specific one.
+// Per-entry deliberate no-diagnostics stance for SKILLS: a per-skill SKILL.md
+// that is missing or unparseable is skipped silently — exactly as this tier's
+// MCP ingest silently skips a non-map server entry. This is acknowledged (not
+// an accidental silent drop): a stray directory in a shared skills root must
+// not break import of the rest. Hook ingest is the exception: it warns through
+// Options.Stderr, because a lossy hook event must not be captured.
 func (a *Adapter) ingestSkills(skillsDir string) ([]source.Skill, error) {
 	entries, present, err := adapter.ReadDirOptional(skillsDir)
 	if err != nil {

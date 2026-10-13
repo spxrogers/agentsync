@@ -805,7 +805,7 @@ func TestSkills_SpecPathsPinned(t *testing.T) {
 		"qwen":    {".qwen/skills", ".qwen/skills"},
 		"junie":   {".junie/skills", ".junie/skills"},
 		"kiro":    {".kiro/skills", ".kiro/skills"},
-		"factory": {".factory/skills", ".factory/skills"},
+		"factory": {".agents/skills", ".agents/skills"},
 		"copilot": {".copilot/skills", ".github/skills"},
 		// deliberately skills-less (verified: no native SKILL.md scan)
 		"jules":     {"", ""},

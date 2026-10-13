@@ -93,8 +93,9 @@ The ten **deep adapters** (rich, agent-specific, often bidirectional):
 | **Grok Build** | ✓ adapter | MCP (◐, TOML), instructions, complete skills, commands (◐), and command hooks (◐) at user and project scopes. [Supported paths and limits](docs/grok.md). Subagent/LSP projection and plugin import deferred. |
 
 Plus a **breadth tier** of 22 more via one data-driven generic adapter — **memory**
-for all, **MCP** where the agent reads a JSON server-map (15 of 22), and **Agent
-Skills** where the agent natively scans a `SKILL.md` directory (18 of 22): `amp`,
+for all, **MCP** where the agent reads a JSON server-map (15 of 22), **Agent
+Skills** where the agent natively scans a `SKILL.md` directory (18 of 22), and
+command hooks for Factory only: `amp`,
 `goose`, `qwen`, `warp`, `jules`, `junie`, `openhands`, `amazonq`, `zed`,
 `kilocode`, `kiro`, `trae`, `jetbrains`, `firebase`, `antigravity`, `augmentcode`,
 `copilot`, `copilot-cli`, `crush`, `factory`, `pi`, `mistral`. Each is a *verified*

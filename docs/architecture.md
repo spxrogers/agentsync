@@ -248,7 +248,7 @@ published `Adapter` interface (`KeyMergeStrategy() string`) and is deferred to
 them, a single data-driven *generic* adapter (`internal/adapter/generic`) serves a
 long tail of agents from a verified `Spec` table — memory, (where expressible)
 MCP, and (where the agent scans a `SKILL.md` directory) Agent Skills, every other
-component reported as a skip. Both kinds implement the same
+component reported as a skip except Factory command hooks (see the capability matrix). Both kinds implement the same
 `Adapter` interface and register identically, so the rest of the pipeline (plan,
 classify, write, capture, state) treats them uniformly. The set of valid agent
 names is derived from the deep package list **plus** `generic.Specs()` (see
@@ -673,8 +673,9 @@ type HookEventNamer interface {
 }
 ```
 
-- **`HookIngestGuard`** (claude, gemini, cursor, codex, grok — every hook-rendering
-  adapter) re-reads the destination and returns the hook events ingest
+- **`HookIngestGuard`** (claude, gemini, cursor, codex, grok, and Factory — every
+  hook-rendering adapter; the other breadth-tier agents do not implement it)
+  re-reads the destination and returns the hook events ingest
   *semantically* refused: unmodeled fields on well-formed entries, plus
   non-command handlers where the adapter's render cannot round-trip them
   (claude, gemini, cursor, grok); codex re-renders non-command types verbatim, so
@@ -696,7 +697,8 @@ type HookEventNamer interface {
   adapter uses in its owned `/hooks/<name>` pointers (`PreToolUse` →
   `BeforeTool` / `preToolUse`). Canonical hooks are **shared** across agents,
   so a retirement disowns every agent's state key for the event at that scope
-  — and a renaming agent's key is only findable under its native spelling.
+  — a renaming agent's key under its native spelling, and Factory's key at
+  `/<event>` because `hooks.json` is the event map rather than a `hooks` object.
   An adapter that renames without declaring would silently escape the disown
   and the next apply's orphan cleanup would delete the event from its native
   config; the registry-wide guard

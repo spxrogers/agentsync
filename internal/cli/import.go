@@ -457,7 +457,12 @@ func retireRefusedHookEvents(io *importIO, agentsyncHome, srcHome string, a adap
 			continue
 		}
 		for _, alias := range aliases {
-			if key.Pointer == "/hooks/"+alias {
+			// "/hooks/<event>" is the nested shape (claude, codex, gemini,
+			// cursor, grok). Factory's hooks.json is the event map itself, so
+			// its state pointer is "/<event>". Missing that spelling left the
+			// key owned after retirement, and the next apply's orphan cleanup
+			// deleted the native event this retirement exists to protect.
+			if key.Pointer == "/hooks/"+alias || key.Pointer == "/"+alias {
 				delete(st.Keys, key)
 				changed = true
 			}

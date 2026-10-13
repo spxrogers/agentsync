@@ -454,7 +454,8 @@ many agents from a table of verified `Spec`s (`specs.go`) rather than a package
 each. Covers **memory** (a rules/instructions file, plain markdown), **MCP** where
 the agent reads a JSON server-map agentsync can express, and **Agent Skills**
 (`SKILL.md` directories) where the agent natively scans a skills directory — every
-other component is reported as a skip. A `Spec` declares per-scope memory/MCP/skills
+other component is reported as a skip, except Factory command hooks (`hooks.json`;
+only that registered wrapper implements `HookIngestGuard`). A `Spec` declares per-scope memory/MCP/skills
 paths plus MCP "dialect" knobs that capture the tail's variance (top-level key
 `mcpServers`/`servers`/`mcp`/`context_servers`/the flat namespaced `amp.mcpServers`;
 transport field `type`/`transport`/inferred; stdio value `stdio`/`local`; remote

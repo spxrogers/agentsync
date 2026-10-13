@@ -11,6 +11,24 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Added
 
+- **Factory Droid hooks.** `apply` writes command hooks to `~/.factory/hooks.json`
+  and `.factory/hooks.json`. `timeout` is seconds, the unit Droid documents.
+  Events Droid does not have, such as `PostCompact`, are skipped, so the shared
+  `hooks/<event>.toml` other agents use is left alone. Matchers are written
+  as-is and Droid uses its own tool names (`Execute`, `Edit`, …), so a matcher
+  written for Claude Code's names matches nothing there.
+- **`import factory` reads Factory hooks.** It reads `hooks.json`, or the `hooks`
+  key of `settings.json` when `hooks.json` does not exist yet, which is where
+  Droid reads them from too. An event with a field agentsync cannot represent
+  (`commandRegex`, an explicit `timeout` of `0`) is left uncaptured with a
+  warning instead of being captured without it.
+- **The first apply keeps your `settings.json` hooks running.** Once
+  `hooks.json` exists, Droid stops reading the `hooks` key in `settings.json`.
+  So the apply that creates `hooks.json` copies those hooks in first, and only
+  the events agentsync renders replace what was copied. If one of those
+  replaces handlers you had in `settings.json`, apply now warns and names the
+  event, so a hook does not quietly stop firing. `settings.json` itself is
+  never edited.
 - **Hook handlers can now carry a `timeout`.** Add `timeout = 30` to an entry in
   `hooks/<event>.toml` and the handler is allowed 30 seconds across Claude Code,
   Codex CLI, Cursor, Gemini CLI and Grok Build. Before this, `timeout` was a
@@ -453,6 +471,17 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Changed
 
+- **Factory skills move to `~/.agents/skills/`.** Droid scans that shared
+  directory as well as its own `.factory/skills/`, so writing both registered
+  every skill twice whenever Codex or another `.agents/skills` agent was also
+  enabled. The next apply after upgrading removes the skill copies agentsync
+  wrote under `.factory/skills/`, backing up any you edited first, and reports
+  them as removed files. Skills you created there yourself are left alone.
+- **Factory user memory now renders to `~/.factory/AGENTS.md`.** Factory had
+  only a project memory file before. If you already keep a hand-written
+  `~/.factory/AGENTS.md`, the next apply backs it up to
+  `~/.agentsync/.state/backups/` and replaces it with the managed file; move
+  anything you want to keep into `~/.agentsync/memory/AGENTS.md`.
 - **`secret edit` no longer exits the process from a signal handler
   goroutine** ([#235](https://github.com/spxrogers/agentsync/issues/235)).
   SIGINT/SIGTERM while the decrypted vault was on disk removed the temp file and

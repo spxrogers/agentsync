@@ -54,7 +54,7 @@ var registryFactory = func() *adapter.Registry {
 	mustRegister(grok.New(grok.Options{TargetRoot: home, GrokHome: paths.AgentHomeOverride(env, "GROK_HOME")}))
 	// Breadth tier: one generic adapter per verified Spec (memory + optional MCP).
 	for _, spec := range generic.Specs() {
-		mustRegister(generic.New(spec, generic.Options{TargetRoot: home}))
+		mustRegister(generic.Register(spec, generic.Options{TargetRoot: home}))
 	}
 	return r
 }

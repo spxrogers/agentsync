@@ -89,7 +89,11 @@ func TestHookIngestGuard_ReportsCanonicalNames(t *testing.T) {
 					}
 					marshal = func(v map[string]any) ([]byte, error) { return toml.Marshal(v) }
 				}
-				if _, ok := top["hooks"]; !ok {
+				// Claude/Codex/Gemini/Grok nest handlers under "hooks". Factory's
+				// hooks.json is the event map itself, so a top-level array is
+				// the hook document. Other JSON ops (MCP) are objects of objects
+				// and are left alone.
+				if _, ok := top["hooks"]; !ok && !hasTopLevelArray(top) {
 					continue
 				}
 				injectUnmodeledField(top)
@@ -121,12 +125,26 @@ func TestHookIngestGuard_ReportsCanonicalNames(t *testing.T) {
 	// Vacuity guard: the adapters whose hook ingests refuse semantically
 	// must implement HookIngestGuard BY NAME — losing one silently reopens the
 	// issue #124 second-order clobber for that agent.
-	for _, agent := range []string{"claude", "gemini", "cursor", "codex", "grok"} {
+	for _, agent := range []string{"claude", "gemini", "cursor", "codex", "grok", "factory"} {
 		if !guards[agent] {
 			t.Fatalf("agent %s no longer implements adapter.HookIngestGuard — its native "+
 				"hook enrichments would silently stop triggering import's stale-hook retirement", agent)
 		}
 	}
+}
+
+// hasTopLevelArray reports whether any top-level value is an array, which is
+// how Factory's hooks.json is recognised: it IS the event map, so its values
+// are handler arrays, where every other hook-capable adapter nests them under a
+// "hooks" key. The other JSON ops this walk sees (MCP) are objects of objects,
+// so they do not match.
+func hasTopLevelArray(top map[string]any) bool {
+	for _, v := range top {
+		if _, ok := v.([]any); ok {
+			return true
+		}
+	}
+	return false
 }
 
 // injectUnmodeledField walks any decoded JSON value and adds an unmodeled
