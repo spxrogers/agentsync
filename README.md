@@ -143,9 +143,9 @@ Chocolatey:
 
     choco install agentsync
 
-Chocolatey packages pass through the community moderation queue before they're
-publicly installable, so a freshly published version can lag the other channels
-by a day or two.
+Each new Chocolatey version goes through the community repository's automated
+checks before it's publicly installable, so a fresh release can lag the other
+channels by a few hours.
 
 ### Any platform — prebuilt binary
 

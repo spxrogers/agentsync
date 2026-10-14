@@ -471,6 +471,12 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Changed
 
+- **The Chocolatey package has an icon and clearer metadata.** It now shows the
+  agentsync icon, is titled "agentsync CLI", and links its project page to
+  agentsync.cc and its source to the GitHub repository. This follows the
+  Chocolatey validator's guidelines. Chocolatey now treats agentsync as a
+  trusted package, so a new version is listed once its automated checks pass,
+  usually within a few hours. It no longer waits a day or two for human review.
 - **Factory skills move to `~/.agents/skills/`.** Droid scans that shared
   directory as well as its own `.factory/skills/`, so writing both registered
   every skill twice whenever Codex or another `.agents/skills` agent was also

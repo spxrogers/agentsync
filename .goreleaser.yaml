@@ -224,8 +224,9 @@ scoops:
 #
 # Gating lives in the workflow: the chocolatey pipe is skipped unless
 # CHOCOLATEY_API_KEY is present — adding that secret is the whole "go live" step.
-# Chocolatey's community repo runs new packages through a moderation queue, so the
-# first push won't be publicly installable until it clears review.
+# agentsync is a *trusted* package on the Chocolatey community repo: a pushed
+# version skips human moderation and is listed once the automated validator and
+# verifier pass (typically 1-2 hours), not on push.
 #
 # NOTE: the chocolatey pipe packages the Windows amd64 binary only — goreleaser's
 # own arch filter selects amd64/386 and excludes arm64 — so the windows/arm64
@@ -234,17 +235,30 @@ scoops:
 chocolateys:
   - name: agentsync
     ids: [default]
-    title: agentsync
+    # Package metadata follows the Chocolatey package validator's guidelines
+    # (https://docs.chocolatey.org/en-us/community-repository/moderation/package-validator/rules/):
+    #   - CPMR0050: title must not equal the id, hence "agentsync CLI".
+    #   - CPMR0041: projectUrl (the homepage) and projectSourceUrl (the code)
+    #     should differ, hence agentsync.cc vs the GitHub repo.
+    #   - CPMR0033/0058: iconUrl must be set, PNG preferred (>=128px), hosted
+    #     somewhere we control rather than raw.githubusercontent.com. It is
+    #     website/public/icon.png (a 256px render of website/public/favicon.svg)
+    #     served from agentsync.cc. goreleaser does NOT template icon_url, so it
+    #     can't be pinned per tag; if the icon changes, keep the same path.
+    #   - CPMR0068 (a Note): owners == authors on purpose. The maintainer IS the
+    #     author.
+    title: agentsync CLI
     authors: spxrogers
     owners: spxrogers
     summary: Centrally manage AI coding-agent configurations.
     description: |
       agentsync centrally manages AI coding-agent configurations from one
       canonical source and renders them into each agent's native config.
-    project_url: https://github.com/spxrogers/agentsync
+    project_url: https://agentsync.cc/
     project_source_url: https://github.com/spxrogers/agentsync
     package_source_url: https://github.com/spxrogers/agentsync
-    docs_url: https://agentsync.cc/
+    icon_url: https://agentsync.cc/icon.png
+    docs_url: https://agentsync.cc/getting-started/introduction/
     bug_tracker_url: https://github.com/spxrogers/agentsync/issues
     license_url: https://github.com/spxrogers/agentsync/blob/main/LICENSE
     require_license_acceptance: false
