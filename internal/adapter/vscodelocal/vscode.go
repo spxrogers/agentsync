@@ -28,6 +28,16 @@ func (a *Adapter) Name() string             { return "vscode-local" }
 func (a *Adapter) Detect() (bool, error)    { _, err := exec.LookPath("code"); return err == nil, nil }
 func (a *Adapter) KeyMergeStrategy() string { return "" }
 
+// VersionRoots implements adapter.VersionedDirs, always declaring NO roots.
+// vscode-local renders one managed file under the selected VS Code profile's
+// prompts directory, which is application-owned space; backing it up is the
+// destination-directory Git backup's job, never a repo initialized by the
+// apply tail inside the editor profile tree (CLAUDE.md invariant 1: the
+// versioned-home sweep must never sweep toward $HOME or app homes).
+func (a *Adapter) VersionRoots(scope adapter.Scope, project string) []string {
+	return nil
+}
+
 // ResolveTarget uses the explicitly selected profile promptsHome. Never guess
 // from a product name, enumerate other profiles, or share Copilot's home paths.
 // A test redirect always wins over a real configured profile path.
