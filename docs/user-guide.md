@@ -1121,3 +1121,39 @@ Quick hits:
 
 Found a rough edge during your first 100 minutes? That's exactly the beta
 feedback we want — [open an issue](https://github.com/spxrogers/agentsync/issues).
+
+
+## Host permission semantics
+
+Permission drift uses the same comparison in diagnostics and the writer. On Windows, only the owner-write bit is compared because Go chmod represents the read-only attribute; group, other, and execute bits cannot be applied independently. Unix still compares all nine permission bits. This prevents content-identical files from repeatedly appearing changed on Windows while retaining detection of read-only drift. The shared comparison lives in internal/filemode; regression coverage includes TestPermissionSemantics, TestHostPermissionDrift, and TestWriterHostPermissionConvergence.
+
+
+## VS Code Local harness profile instructions
+
+The opt-in `vscode-local` adapter manages only a selected profile's
+`agentsync.instructions.md`. It renders current canonical memory after YAML
+frontmatter `applyTo: "**"`; the managed banner is in the Markdown body.
+It is separate from `copilot` (existing Copilot skills/project targets) and
+Copilot Agent Host home instructions. BYOK, model/provider settings and inline
+completions are outside this adapter.
+
+Enable `[agents.vscode-local] enabled = true` and configure an absolute
+`[vscode_local] prompts_home = "/absolute/selected/profile/prompts"` in
+`agentsync.toml`. First verify the running editor's actual `currentProfile.promptsHome`.
+Select the effective prompts directory explicitly for default/named profiles,
+profiles inheriting default prompts, portable installs or custom user-data-dir.
+There is no product-name based fallback and no writes across all profiles.
+`AGENTSYNC_TARGET_ROOT` redirects this target beneath the sandbox even when
+the configured profile path is real. Existing sibling instruction files are
+preserved; an unmanaged same-name collision is refused. Repeated apply is a no-op.
+No profile Git repository is initialized. Import/reconcile write-back is currently
+unsupported; edit canonical memory and apply instead.
+
+VS Code Local instruction discovery requires `chat.includeApplyingInstructions`
+(default true). The adapter does not rewrite editor settings. Verify the selected
+Local harness in Agent Customizations and then References in a representative
+request; file discovery alone does not prove model adherence. Sending a BYOK
+request may incur costs and is a separate validation step.
+
+Sources: https://code.visualstudio.com/docs/agent-customization/custom-instructions
+and https://code.visualstudio.com/docs/agents/reference/ai-settings .

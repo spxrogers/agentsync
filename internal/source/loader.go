@@ -149,6 +149,9 @@ func loadConfig(fs afero.Fs, home string, cfg *Config) error {
 	// (mode = "On"/"yes"/"true") would otherwise slip through and silently
 	// change behavior. Reject it here so every source.Load caller (apply,
 	// doctor) agrees at load time.
+	if cfg.Agents["vscode-local"].Enabled && !filepath.IsAbs(cfg.VSCodeLocal.PromptsHome) {
+		return fmt.Errorf("vscode-local requires an absolute vscode_local.prompts_home selected from the active profile")
+	}
 	if err := cfg.DestinationGitBackup.validateMode(); err != nil {
 		return fmt.Errorf("parse %s: %w", p, err)
 	}

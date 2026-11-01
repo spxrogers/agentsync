@@ -32,6 +32,7 @@ type Canonical struct {
 
 // Config mirrors agentsync.toml at the root of ~/.agentsync/.
 type Config struct {
+	VSCodeLocal          VSCodeLocalConfig          `toml:"vscode_local"`
 	Agents               map[string]Agent           `toml:"agents"`
 	Updates              UpdateDefaults             `toml:"updates"`
 	Secrets              SecretsConfig              `toml:"secrets"`
@@ -418,4 +419,9 @@ type LSPServerSpec struct {
 type Memory struct {
 	Body      string            // raw AGENTS.md (with @import directives); expansion happens at render via ExpandMemoryImports
 	Fragments map[string]string // fragment body, keyed by slash path under memory/fragments/ (loaded recursively)
+}
+
+// VSCodeLocalConfig binds exactly one explicitly selected VS Code profile.
+type VSCodeLocalConfig struct {
+	PromptsHome string `toml:"prompts_home"`
 }

@@ -14,6 +14,7 @@ import (
 	"github.com/spxrogers/agentsync/internal/adapter/grok"
 	"github.com/spxrogers/agentsync/internal/adapter/opencode"
 	"github.com/spxrogers/agentsync/internal/adapter/roo"
+	"github.com/spxrogers/agentsync/internal/adapter/vscodelocal"
 	"github.com/spxrogers/agentsync/internal/adapter/windsurf"
 	"github.com/spxrogers/agentsync/internal/paths"
 )
@@ -47,6 +48,7 @@ var registryFactory = func() *adapter.Registry {
 	mustRegister(windsurf.New(windsurf.Options{TargetRoot: home}))
 	mustRegister(roo.New(roo.Options{TargetRoot: home}))
 	mustRegister(cline.New(cline.Options{TargetRoot: home}))
+	mustRegister(vscodelocal.New(vscodelocal.Options{RedirectRoot: env.Get("AGENTSYNC_TARGET_ROOT")}))
 	// GROK_HOME goes through paths.Env like every other path input — never a raw
 	// os.Getenv — and paths.AgentHomeOverride blanks it under
 	// AGENTSYNC_TARGET_ROOT, so a redirected run can never escape to the real

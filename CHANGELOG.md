@@ -11,6 +11,14 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Added
 
+- Opt-in vscode-local instructions target with explicit profile prompts_home, applyTo frontmatter, sandbox redirection, same-name collision protection and shared Windows permission semantics. Existing Copilot skill destinations remain separate.
+
+### Fixed
+
+- Compare Windows file permissions using the owner-write (read-only) bit in status, diff, explain, and apply. Equivalent 0666/0644 modes no longer cause repeated writes. Unix permission detection remains unchanged.
+
+### Added
+
 - **Factory Droid hooks.** `apply` writes command hooks to `~/.factory/hooks.json`
   and `.factory/hooks.json`. `timeout` is seconds, the unit Droid documents.
   Events Droid does not have, such as `PostCompact`, are skipped, so the shared

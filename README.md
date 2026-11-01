@@ -6,7 +6,7 @@
 
 Define your MCP servers, memory, skills, and marketplace plugins once in
 `~/.agentsync/`. Run `agentsync apply`. They land — correctly translated — in
-**32 agents**: ten deep adapters (Claude Code, OpenCode, Codex CLI, Cursor,
+**32 agents**, plus an opt-in VS Code Local profile-instructions target: ten deep adapters (Claude Code, OpenCode, Codex CLI, Cursor,
 Gemini CLI, Continue, Windsurf, Roo Code, Cline, Grok Build) plus a breadth tier of 22 more
 (amp, goose, qwen, warp, zed, kiro, junie, factory, copilot, crush, …).
 
@@ -14,7 +14,7 @@ Gemini CLI, Continue, Windsurf, Roo Code, Cline, Grok Build) plus a breadth tier
 
 </div>
 
-> **Status: beta (v0.1.0).** Ships 32 agents — ten deep adapters (Claude, OpenCode, Codex, Cursor, Gemini, Continue, Windsurf, Roo, Cline, Grok Build) + a 22-agent breadth tier — end-to-end.
+> **Status: beta (v0.1.0).** Ships 32 agents plus opt-in VS Code Local profile instructions — ten deep adapters (Claude, OpenCode, Codex, Cursor, Gemini, Continue, Windsurf, Roo, Cline, Grok Build) + a 22-agent breadth tier — end-to-end.
 > The tool is functional and tested under `just test-release`; the canonical
 > layout, CLI surface, and state schema are stabilizing toward `1.0.0` and may
 > still change. A few documented trade-offs remain (see [Known limits](#known-limits)).
@@ -304,3 +304,39 @@ of `test-release`, so the release gate stays hermetic and offline.
 ## License
 
 MIT.
+
+
+## Host permission semantics
+
+Permission drift uses the same comparison in diagnostics and the writer. On Windows, only the owner-write bit is compared because Go chmod represents the read-only attribute; group, other, and execute bits cannot be applied independently. Unix still compares all nine permission bits. This prevents content-identical files from repeatedly appearing changed on Windows while retaining detection of read-only drift. The shared comparison lives in internal/filemode; regression coverage includes TestPermissionSemantics, TestHostPermissionDrift, and TestWriterHostPermissionConvergence.
+
+
+## VS Code Local harness profile instructions
+
+The opt-in `vscode-local` adapter manages only a selected profile's
+`agentsync.instructions.md`. It renders current canonical memory after YAML
+frontmatter `applyTo: "**"`; the managed banner is in the Markdown body.
+It is separate from `copilot` (existing Copilot skills/project targets) and
+Copilot Agent Host home instructions. BYOK, model/provider settings and inline
+completions are outside this adapter.
+
+Enable `[agents.vscode-local] enabled = true` and configure an absolute
+`[vscode_local] prompts_home = "/absolute/selected/profile/prompts"` in
+`agentsync.toml`. First verify the running editor's actual `currentProfile.promptsHome`.
+Select the effective prompts directory explicitly for default/named profiles,
+profiles inheriting default prompts, portable installs or custom user-data-dir.
+There is no product-name based fallback and no writes across all profiles.
+`AGENTSYNC_TARGET_ROOT` redirects this target beneath the sandbox even when
+the configured profile path is real. Existing sibling instruction files are
+preserved; an unmanaged same-name collision is refused. Repeated apply is a no-op.
+No profile Git repository is initialized. Import/reconcile write-back is currently
+unsupported; edit canonical memory and apply instead.
+
+VS Code Local instruction discovery requires `chat.includeApplyingInstructions`
+(default true). The adapter does not rewrite editor settings. Verify the selected
+Local harness in Agent Customizations and then References in a representative
+request; file discovery alone does not prove model adherence. Sending a BYOK
+request may incur costs and is a separate validation step.
+
+Sources: https://code.visualstudio.com/docs/agent-customization/custom-instructions
+and https://code.visualstudio.com/docs/agents/reference/ai-settings .
