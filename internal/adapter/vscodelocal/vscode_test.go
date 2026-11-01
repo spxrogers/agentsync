@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/spxrogers/agentsync/internal/adapter"
+	"github.com/spxrogers/agentsync/internal/adapter/generic"
 	"github.com/spxrogers/agentsync/internal/render"
 	"github.com/spxrogers/agentsync/internal/secrets"
 	"github.com/spxrogers/agentsync/internal/source"
@@ -33,6 +34,30 @@ func TestProfileSelection(t *testing.T) {
 		if _, err := ResolveTarget(bad, ""); err == nil {
 			t.Fatalf("accepted ambiguous profile %q", bad)
 		}
+	}
+}
+
+func TestEnvironmentProfileSelection(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("AGENTSYNC_TEST_PROFILE", root)
+	for _, value := range []string{"${env:AGENTSYNC_TEST_PROFILE}/prompts", "${AGENTSYNC_TEST_PROFILE}/prompts", "$AGENTSYNC_TEST_PROFILE/prompts"} {
+		target, err := ResolveTarget(value, "")
+		if err != nil || target != filepath.Join(root, "prompts", FileName) {
+			t.Fatalf("resolve %q: %q, %v", value, target, err)
+		}
+		redirect := filepath.Join(root, "sandbox")
+		target, err = ResolveTarget(value, redirect)
+		if err != nil || target != filepath.Join(redirect, ".vscode-local", "prompts", FileName) {
+			t.Fatalf("redirect %q: %q, %v", value, target, err)
+		}
+	}
+	t.Setenv("AGENTSYNC_TEST_PROFILE", "")
+	if _, err := ResolveTarget("${env:AGENTSYNC_TEST_PROFILE}/prompts", ""); err == nil {
+		t.Fatal("accepted empty environment variable")
+	}
+	t.Setenv("AGENTSYNC_TEST_PROFILE", "relative")
+	if _, err := ResolveTarget("${env:AGENTSYNC_TEST_PROFILE}/prompts", ""); err == nil {
+		t.Fatal("accepted relative expanded path")
 	}
 }
 
@@ -107,7 +132,66 @@ func TestInstructionsPreservationAndIdempotence(t *testing.T) {
 		t.Fatal("missing project guard")
 	}
 	scoped, skips, err := a.Render(secrets.ForRender(c), adapter.ScopeProject, root)
-	if err != nil || len(scoped) != 0 || len(skips) != 1 {
+	if err != nil || len(scoped) != 1 || len(skips) != 0 || scoped[0].Path != filepath.Join(root, ".github", "instructions", FileName) {
 		t.Fatal("unexpected project-scope write")
+	}
+}
+
+func TestLocalHarnessResources(t *testing.T) {
+	root := t.TempDir()
+	c := source.Canonical{
+		Subagents:  []source.Subagent{{Name: "reviewer", Frontmatter: map[string]any{"description": "Review changes", "tools": []string{"read"}}, Body: "Review only."}},
+		Commands:   []source.Command{{Name: "verify", Body: "Run checks."}},
+		Skills:     []source.Skill{{Name: "inspect", Body: "Inspect changes.", Files: []source.SkillFile{{Path: "references/check.txt", Content: []byte("Preserve checks.\n"), Mode: 0o644}}}},
+		MCPServers: []source.MCPServer{{ID: "example", Server: source.MCPServerSpec{Command: "example-server"}}},
+	}
+	c.Config.VSCodeLocal.PromptsHome = filepath.Join(root, "profile", "prompts")
+	ops, skips, err := New(Options{RedirectRoot: root}).Render(secrets.ForRender(c), adapter.ScopeUser, "")
+	if err != nil || len(skips) != 0 || len(ops) != 5 {
+		t.Fatalf("render: %v %+v %+v", err, ops, skips)
+	}
+	for _, op := range ops {
+		if !strings.HasPrefix(op.Path, root+string(filepath.Separator)) {
+			t.Fatalf("escaped sandbox: %s", op.Path)
+		}
+	}
+	if !strings.HasSuffix(ops[0].Path, "reviewer.agent.md") || !strings.HasSuffix(ops[1].Path, "verify.prompt.md") || !strings.HasSuffix(ops[4].Path, "mcp.json") {
+		t.Fatalf("wrong resource locations: %+v", ops)
+	}
+	if err := New(Options{RedirectRoot: root}).Apply(ops, adapter.PassThroughWriter{}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(root, ".copilot", "skills", "inspect", "references", "check.txt"))
+	if err != nil || string(data) != "Preserve checks.\n" {
+		t.Fatalf("bundled skill file was lost: %q %v", data, err)
+	}
+}
+
+func TestSharedProjectAgentIsIdentical(t *testing.T) {
+	root := t.TempDir()
+	c := source.Canonical{Subagents: []source.Subagent{{Name: "reviewer", Frontmatter: map[string]any{"description": "Review", "tools": []string{"read"}}, Body: "Review only.\n"}}}
+	localOps, _, err := New(Options{}).Render(secrets.ForRender(c), adapter.ScopeProject, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	copilotOps, _, err := generic.RenderVSCodeResources(c, "copilot", root, "", adapter.ScopeProject, root)
+	if err != nil || len(localOps) != 1 || len(copilotOps) != 1 || localOps[0].Path != copilotOps[0].Path || string(localOps[0].Content) != string(copilotOps[0].Content) {
+		t.Fatalf("shared project agent conflicts: %v %+v %+v", err, localOps, copilotOps)
+	}
+}
+
+func TestProfileMCPOverride(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("AGENTSYNC_TEST_PROFILE", root)
+	config := source.VSCodeLocalConfig{PromptsHome: "${env:AGENTSYNC_TEST_PROFILE}/default/prompts", MCPFile: "${env:AGENTSYNC_TEST_PROFILE}/named/mcp.json"}
+	path, err := config.ResolveMCPFile()
+	if err != nil || path != filepath.Join(root, "named", "mcp.json") {
+		t.Fatalf("profile MCP override: %q %v", path, err)
+	}
+	c := source.Canonical{MCPServers: []source.MCPServer{{ID: "example", Server: source.MCPServerSpec{Command: "example-server"}}}}
+	c.Config.VSCodeLocal = config
+	ops, _, err := New(Options{RedirectRoot: root}).Render(secrets.ForRender(c), adapter.ScopeUser, "")
+	if err != nil || len(ops) != 1 || ops[0].Path != filepath.Join(root, ".vscode-local", "mcp.json") {
+		t.Fatalf("MCP override escaped sandbox: %v %+v", err, ops)
 	}
 }

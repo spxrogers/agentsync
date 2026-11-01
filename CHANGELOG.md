@@ -11,6 +11,18 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Added
 
+- Expand environment-based Local profile paths (`${env:VAR}`, `${VAR}`, `$VAR`)
+  without rewriting canonical config; reject missing variables and relative
+  results. Optional `mcp_file` handles profiles inheriting another prompts path.
+- Extend Local with profile/project agents, prompt files, conditional instructions,
+  complete native skills, and JSONC MCP key merging. Project-only rendering no
+  longer requires user profile configuration.
+- Extend Copilot with user MCP in its native dialect, agents, conditional
+  instructions, and manual command skills. Unsupported metadata and command/skill
+  collisions are reported rather than silently broadening execution permissions.
+- Add explicit `[copilot] hooks_enabled` opt-in for reviewed native camelCase
+  command hooks. Local/Claude Hook protocols are not automatically converted;
+  managed Copilot hook import remains explicitly unsupported.
 - Opt-in vscode-local instructions target with explicit profile prompts_home, applyTo frontmatter, sandbox redirection, same-name collision protection and shared Windows permission semantics. Existing Copilot skill destinations remain separate.
 - The breadth `copilot` row now also renders user-scope memory to `~/.copilot/copilot-instructions.md` (the Copilot harness user-level instructions file, next to its `~/.copilot/skills` user dir), so global instructions sync there without an external copy step.
 

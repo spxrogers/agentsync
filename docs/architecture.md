@@ -1703,15 +1703,15 @@ Permission drift uses the same comparison in diagnostics and the writer. On Wind
 
 ## VS Code Local harness profile instructions
 
-The opt-in `vscode-local` adapter manages only a selected profile's
-`agentsync.instructions.md`. It renders current canonical memory after YAML
-frontmatter `applyTo: "**"`; the managed banner is in the Markdown body.
-It is separate from `copilot` (existing Copilot skills/project targets) and
-Copilot Agent Host home instructions. BYOK, model/provider settings and inline
-completions are outside this adapter.
+The opt-in `vscode-local` adapter renders profile instructions, agents, prompts,
+conditional instructions, skills, and MCP. Copilot renders harness-home resources
+and shares native project targets where the formats agree. Rendering reuses the
+generic MCP/skills writers and the common VS Code Markdown projection. Shared
+project agents are byte-identical; differing metadata is rejected or skipped
+before writing. Local declares JSON key merging and the matching MCP spec ingester.
 
 Enable `[agents.vscode-local] enabled = true` and configure an absolute
-`[vscode_local] prompts_home = "/absolute/selected/profile/prompts"` in
+`[vscode_local] prompts_home = '${env:APPDATA}/Code/User/prompts'` in
 `agentsync.toml`. First verify the running editor's actual `currentProfile.promptsHome`.
 Select the effective prompts directory explicitly for default/named profiles,
 profiles inheriting default prompts, portable installs or custom user-data-dir.
@@ -1719,8 +1719,16 @@ There is no product-name based fallback and no writes across all profiles.
 `AGENTSYNC_TARGET_ROOT` redirects this target beneath the sandbox even when
 the configured profile path is real. Existing sibling instruction files are
 preserved; an unmanaged same-name collision is refused. Repeated apply is a no-op.
-No profile Git repository is initialized. Import/reconcile write-back is currently
-unsupported; edit canonical memory and apply instead.
+No profile Git repository is initialized. Local whole-agent import/reconcile
+write-back remains unsupported. `mcp_file` handles profiles whose MCP and inherited
+prompts belong to different locations. Environment expansion is runtime-only;
+canonical expressions are retained. Project paths do not depend on user profiles.
+Conditional instruction files reuse `Memory.Fragments`, rather than a new secret
+surface. Copilot command skills carry a managed marker for reverse import, which
+refuses changed invocation metadata or bundled files. Copilot native command hooks
+require explicit per-scope opt-in; no automatic Hook protocol conversion occurs.
+See the [harness contract](capability-matrix.md#vs-code-local-harness-profile-instructions)
+for paths and import limitations.
 
 VS Code Local instruction discovery requires `chat.includeApplyingInstructions`
 (default true). The adapter does not rewrite editor settings. Verify the selected

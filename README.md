@@ -6,7 +6,7 @@
 
 Define your MCP servers, memory, skills, and marketplace plugins once in
 `~/.agentsync/`. Run `agentsync apply`. They land — correctly translated — in
-**32 agents**, plus an opt-in VS Code Local profile-instructions target: ten deep adapters (Claude Code, OpenCode, Codex CLI, Cursor,
+**32 agents**, plus an opt-in VS Code Local profile/project target: ten deep adapters (Claude Code, OpenCode, Codex CLI, Cursor,
 Gemini CLI, Continue, Windsurf, Roo Code, Cline, Grok Build) plus a breadth tier of 22 more
 (amp, goose, qwen, warp, zed, kiro, junie, factory, copilot, crush, …).
 
@@ -14,7 +14,7 @@ Gemini CLI, Continue, Windsurf, Roo Code, Cline, Grok Build) plus a breadth tier
 
 </div>
 
-> **Status: beta (v0.1.0).** Ships 32 agents plus opt-in VS Code Local profile instructions — ten deep adapters (Claude, OpenCode, Codex, Cursor, Gemini, Continue, Windsurf, Roo, Cline, Grok Build) + a 22-agent breadth tier — end-to-end.
+> **Status: beta (v0.1.0).** Ships 32 agents plus opt-in VS Code Local profile/project resources — ten deep adapters (Claude, OpenCode, Codex, Cursor, Gemini, Continue, Windsurf, Roo, Cline, Grok Build) + a 22-agent breadth tier — end-to-end.
 > The tool is functional and tested under `just test-release`; the canonical
 > layout, CLI surface, and state schema are stabilizing toward `1.0.0` and may
 > still change. A few documented trade-offs remain (see [Known limits](#known-limits)).
@@ -95,13 +95,17 @@ The ten **deep adapters** (rich, agent-specific, often bidirectional):
 Plus a **breadth tier** of 22 more via one data-driven generic adapter — **memory**
 for all, **MCP** where the agent reads a JSON server-map (15 of 22), **Agent
 Skills** where the agent natively scans a `SKILL.md` directory (18 of 22), and
-command hooks for Factory only: `amp`,
+command hooks for Factory and opt-in Copilot: `amp`,
 `goose`, `qwen`, `warp`, `jules`, `junie`, `openhands`, `amazonq`, `zed`,
 `kilocode`, `kiro`, `trae`, `jetbrains`, `firebase`, `antigravity`, `augmentcode`,
 `copilot`, `copilot-cli`, `crush`, `factory`, `pi`, `mistral`. Each is a *verified*
 spec (paths cross-referenced against upstream docs + prior art), flowing through the
 same drift/secrets/capture pipeline as the deep adapters. See the
 [capability matrix → Breadth tier](docs/capability-matrix.md#breadth-tier).
+
+Copilot additionally supports agents, conditional instructions, and manual
+command skills. The opt-in Local target supports profile prompts, agents,
+instructions, native skills, and profile/project MCP.
 
 Full ✓/◐/✗ breakdown per component: **[capability matrix](docs/capability-matrix.md)**.
 
@@ -313,15 +317,14 @@ Permission drift uses the same comparison in diagnostics and the writer. On Wind
 
 ## VS Code Local harness profile instructions
 
-The opt-in `vscode-local` adapter manages only a selected profile's
-`agentsync.instructions.md`. It renders current canonical memory after YAML
-frontmatter `applyTo: "**"`; the managed banner is in the Markdown body.
-It is separate from `copilot` (existing Copilot skills/project targets) and
-Copilot Agent Host home instructions. BYOK, model/provider settings and inline
-completions are outside this adapter.
+The opt-in `vscode-local` adapter manages a selected profile's
+`agentsync.instructions.md`, agents, prompt files, conditional instructions,
+skills, and MCP. It is separate from `copilot` harness-home targets. BYOK,
+model/provider settings, inline completions, and Local Hook migration are outside
+this adapter. Both targets support project resources.
 
 Enable `[agents.vscode-local] enabled = true` and configure an absolute
-`[vscode_local] prompts_home = "/absolute/selected/profile/prompts"` in
+`[vscode_local] prompts_home = '${env:APPDATA}/Code/User/prompts'` in
 `agentsync.toml`. First verify the running editor's actual `currentProfile.promptsHome`.
 Select the effective prompts directory explicitly for default/named profiles,
 profiles inheriting default prompts, portable installs or custom user-data-dir.
@@ -329,8 +332,14 @@ There is no product-name based fallback and no writes across all profiles.
 `AGENTSYNC_TARGET_ROOT` redirects this target beneath the sandbox even when
 the configured profile path is real. Existing sibling instruction files are
 preserved; an unmanaged same-name collision is refused. Repeated apply is a no-op.
-No profile Git repository is initialized. Import/reconcile write-back is currently
-unsupported; edit canonical memory and apply instead.
+No profile Git repository is initialized. Local whole-agent import/reconcile
+write-back is unsupported; edit canonical resources and apply instead.
+Use `mcp_file` when a named profile inherits prompts but uses another MCP file.
+Environment paths are expanded in memory, not persisted as machine-specific
+paths. Unset/empty variables or non-absolute results are errors.
+For target paths, Copilot command/agent metadata, conditional fragments, and
+reviewed native Hook opt-in, see the
+[harness contract](docs/capability-matrix.md#vs-code-local-harness-profile-instructions).
 
 VS Code Local instruction discovery requires `chat.includeApplyingInstructions`
 (default true). The adapter does not rewrite editor settings. Verify the selected

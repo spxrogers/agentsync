@@ -6,6 +6,9 @@ package source
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/spxrogers/agentsync/internal/untrusted"
 )
@@ -32,6 +35,7 @@ type Canonical struct {
 
 // Config mirrors agentsync.toml at the root of ~/.agentsync/.
 type Config struct {
+	Copilot              CopilotConfig              `toml:"copilot"`
 	VSCodeLocal          VSCodeLocalConfig          `toml:"vscode_local"`
 	Agents               map[string]Agent           `toml:"agents"`
 	Updates              UpdateDefaults             `toml:"updates"`
@@ -424,4 +428,43 @@ type Memory struct {
 // VSCodeLocalConfig binds exactly one explicitly selected VS Code profile.
 type VSCodeLocalConfig struct {
 	PromptsHome string `toml:"prompts_home"`
+	MCPFile     string `toml:"mcp_file,omitempty"`
+}
+
+type CopilotConfig struct {
+	HooksEnabled bool `toml:"hooks_enabled,omitempty"`
+}
+
+func (c VSCodeLocalConfig) ResolvePromptsHome() (string, error) {
+	return resolveVSCodePath(c.PromptsHome, "prompts_home")
+}
+
+func (c VSCodeLocalConfig) ResolveMCPFile() (string, error) {
+	if c.MCPFile != "" {
+		return resolveVSCodePath(c.MCPFile, "mcp_file")
+	}
+	profile, err := c.ResolvePromptsHome()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(filepath.Dir(profile), "mcp.json"), nil
+}
+
+func resolveVSCodePath(value, field string) (string, error) {
+	var missing string
+	resolved := os.Expand(value, func(key string) string {
+		key = strings.TrimPrefix(key, "env:")
+		value := os.Getenv(key)
+		if value == "" {
+			missing = key
+		}
+		return value
+	})
+	if missing != "" {
+		return "", fmt.Errorf("vscode_local.%s references an unset or empty environment variable %q", field, missing)
+	}
+	if !filepath.IsAbs(resolved) {
+		return "", fmt.Errorf("vscode-local requires an absolute vscode_local.%s after environment expansion", field)
+	}
+	return filepath.Clean(resolved), nil
 }

@@ -139,6 +139,39 @@ source) and is on unless you set `banner = false`. See the
 	`agentsync doctor`.
 </Aside>
 
+## VS Code harnesses
+
+Enable the Local target explicitly and select the running profile's prompts path.
+For the default Windows profile:
+
+```toml
+[agents.vscode-local]
+enabled = true
+
+[vscode_local]
+prompts_home = '${env:APPDATA}/Code/User/prompts'
+```
+
+`${env:VAR}`, `${VAR}`, and `$VAR` expand at runtime without replacing the
+expression in canonical config. Empty/unset variables and non-absolute expanded
+paths are rejected. Select the real profile path for named profiles, portable
+installs, and custom user-data directories. `mcp_file` optionally selects a
+different MCP file, especially when prompts are inherited from another profile.
+Project-only rendering uses fixed project targets without a user profile path.
+
+Local projects agents, prompt files, instructions, native skills, and MCP;
+Copilot projects agents, instructions, native skills, MCP, and manual command
+skills. Conditional instructions live in
+`memory/fragments/**/*.instructions.md` with native `applyTo` or `description`.
+Do not `@import` them into global memory unless they should also apply globally.
+
+Copilot hooks default to disabled. `[copilot] hooks_enabled = true` only enables
+reviewed native camelCase command handlers without matchers. Hook scripts are
+not automatically converted between Local, Copilot, and Claude protocols.
+Local whole-agent import/write-back remains unsupported; managed Copilot hooks
+also refuse import. See the [capability matrix](/reference/capability-matrix/#vs-code-local-harness-profile-instructions)
+for exact targets, metadata constraints, and conditional-memory import limits.
+
 ## Per-component files
 
 | File | Holds |

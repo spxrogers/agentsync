@@ -145,7 +145,7 @@ func Specs() []Spec {
 		{
 			Name:   "copilot",
 			Memory: FileTarget{User: ".copilot/copilot-instructions.md", Project: ".github/copilot-instructions.md"},
-			MCP:    MCPTarget{Project: ".vscode/mcp.json", RootKey: "servers", TransportKey: "type"},
+			MCP:    MCPTarget{User: ".copilot/mcp-config.json", Project: ".vscode/mcp.json", RootKey: "servers", TransportKey: "type"},
 			Skills: FileTarget{User: ".copilot/skills", Project: ".github/skills"},
 		},
 		// GitHub Copilot CLI — AGENTS.md; MCP `~/.copilot/mcp-config.json` with

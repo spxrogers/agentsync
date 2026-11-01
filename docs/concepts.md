@@ -299,15 +299,13 @@ jump straight to the [user guide](user-guide.md) to get hands-on.
 
 ## VS Code Local harness profile instructions
 
-The opt-in `vscode-local` adapter manages only a selected profile's
-`agentsync.instructions.md`. It renders current canonical memory after YAML
-frontmatter `applyTo: "**"`; the managed banner is in the Markdown body.
-It is separate from `copilot` (existing Copilot skills/project targets) and
-Copilot Agent Host home instructions. BYOK, model/provider settings and inline
-completions are outside this adapter.
+The opt-in `vscode-local` adapter manages profile instructions, agents, prompts,
+conditional instructions, skills, and MCP. It is separate from `copilot`
+harness-home targets. Both support project resources. BYOK, model/provider
+settings, inline completions, and automatic Local Hook migration are not managed.
 
 Enable `[agents.vscode-local] enabled = true` and configure an absolute
-`[vscode_local] prompts_home = "/absolute/selected/profile/prompts"` in
+`[vscode_local] prompts_home = '${env:APPDATA}/Code/User/prompts'` in
 `agentsync.toml`. First verify the running editor's actual `currentProfile.promptsHome`.
 Select the effective prompts directory explicitly for default/named profiles,
 profiles inheriting default prompts, portable installs or custom user-data-dir.
@@ -315,8 +313,17 @@ There is no product-name based fallback and no writes across all profiles.
 `AGENTSYNC_TARGET_ROOT` redirects this target beneath the sandbox even when
 the configured profile path is real. Existing sibling instruction files are
 preserved; an unmanaged same-name collision is refused. Repeated apply is a no-op.
-No profile Git repository is initialized. Import/reconcile write-back is currently
-unsupported; edit canonical memory and apply instead.
+No profile Git repository is initialized. Local whole-agent import/reconcile
+write-back remains unsupported; edit canonical resources and apply instead.
+Environment expressions remain in config and resolve only in memory; unset or
+empty variables and non-absolute results fail. `mcp_file` selects a separate MCP
+location for profiles inheriting prompts. Project-only rendering needs neither.
+`memory/fragments/**/*.instructions.md` are conditional files with `applyTo` or
+`description`, not automatically imported into global memory. Copilot commands
+are manual skills; metadata that cannot be represented is reported as skipped.
+`[copilot] hooks_enabled` defaults to false and only enables reviewed native
+command handlers, not automatic protocol migration. See the
+[harness contract](capability-matrix.md#vs-code-local-harness-profile-instructions).
 
 VS Code Local instruction discovery requires `chat.includeApplyingInstructions`
 (default true). The adapter does not rewrite editor settings. Verify the selected

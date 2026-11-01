@@ -34,13 +34,14 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 			if err != nil {
 				return c, fmt.Errorf("parse %s: %w", mcpPath, err)
 			}
-			if servers, ok := top[a.spec.MCP.rootKey()].(map[string]any); ok {
+			dialect := a.mcpDialect(scope)
+			if servers, ok := top[dialect.rootKey()].(map[string]any); ok {
 				for id, raw := range servers {
 					spec, ok := raw.(map[string]any)
 					if !ok {
 						continue
 					}
-					c.MCPServers = append(c.MCPServers, source.MCPServer{ID: id, Server: ingestMCPSpec(a.spec.MCP, spec)})
+					c.MCPServers = append(c.MCPServers, source.MCPServer{ID: id, Server: ingestMCPSpec(dialect, spec)})
 				}
 			}
 		}
@@ -72,6 +73,11 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 		c.Hooks = append(c.Hooks, hooks...)
 	}
 
+	if a.spec.Name == "copilot" {
+		if err := a.ingestVSCodeResources(&c, scope, project); err != nil {
+			return c, err
+		}
+	}
 	return c, nil
 }
 
@@ -179,6 +185,9 @@ func ingestMCPSpec(t MCPTarget, raw map[string]any) source.MCPServerSpec {
 // a per-agent knob (RootKey, TransportKey, StdioValue, RemoteURLKey, SSEURLKey)
 // can never be honored on read and missed on write-back.
 func (a *Adapter) IngestMCPSpec(raw map[string]any) source.MCPServerSpec {
+	if a.spec.Name == "copilot" && raw["type"] == "local" {
+		return ingestMCPSpec(a.mcpDialect(adapter.ScopeUser), raw)
+	}
 	return ingestMCPSpec(a.spec.MCP, raw)
 }
 
