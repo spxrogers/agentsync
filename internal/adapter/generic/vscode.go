@@ -338,7 +338,7 @@ func (a *Adapter) ingestVSCodeResources(c *source.Canonical, scope adapter.Scope
 	if _, present, err := adapter.ReadFileOptional(hooksPath); err != nil {
 		return err
 	} else if present {
-		return fmt.Errorf("Copilot hooks import/write-back is unsupported; edit canonical hooks and apply")
+		return fmt.Errorf("copilot hooks import/write-back is unsupported; edit canonical hooks and apply")
 	}
 	return nil
 }
