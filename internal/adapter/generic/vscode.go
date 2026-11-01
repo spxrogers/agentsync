@@ -3,6 +3,7 @@ package generic
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -11,6 +12,13 @@ import (
 	"github.com/spxrogers/agentsync/internal/adapter/claude"
 	"github.com/spxrogers/agentsync/internal/source"
 )
+
+func (a *Adapter) CheckComponentImport(component string) error {
+	if a.spec.Name == "copilot" && component == "hook" {
+		return fmt.Errorf("copilot hooks import/write-back is unsupported; edit canonical hooks and apply")
+	}
+	return nil
+}
 
 func (a *Adapter) CheckFileWriteBack(op adapter.FileOp) error {
 	if a.spec.Name != "copilot" {
@@ -367,10 +375,8 @@ func (a *Adapter) ingestVSCodeResources(c *source.Canonical, scope adapter.Scope
 	if err := ingestVSCodeInstructions(c, instructionsDir, ""); err != nil {
 		return err
 	}
-	if _, present, err := adapter.ReadFileOptional(hooksPath); err != nil {
-		return err
-	} else if present {
-		return fmt.Errorf("copilot hooks import/write-back is unsupported; edit canonical hooks and apply")
+	if _, err := os.Lstat(hooksPath); !os.IsNotExist(err) {
+		fmt.Fprintln(a.warn(), "warning: copilot hooks were not captured: hook import/write-back is unsupported; edit canonical hooks and apply")
 	}
 	return nil
 }

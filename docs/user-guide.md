@@ -1162,6 +1162,9 @@ with native `applyTo` or `description`; do not globally import them by default.
 Copilot commands become manual skills, and same-name skills take precedence.
 Copilot hooks require `[copilot] hooks_enabled = true` and reviewed native
 camelCase events/scripts, not automatic Claude/Local protocol migration.
+`import copilot` and imports of other Copilot components warn and skip managed
+hooks, leaving hook files and ownership untouched. Explicit `copilot:hook`
+selectors are refused, including with `--dry-run`.
 See the [complete harness contract](capability-matrix.md#vs-code-local-harness-profile-instructions)
 for paths, allowed metadata, and import limits.
 

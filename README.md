@@ -338,7 +338,8 @@ agents/command skills/conditional instructions rather than copying generated
 metadata into canonical source. Edit canonical resources and apply, or use
 Copilot's component import for agents and commands. Removed or renamed
 conditional instructions are retired with native-edit backups and shared-owner
-protection.
+protection. Managed Copilot hooks do not block other imports: they are warned
+and skipped, while explicit hook imports are refused.
 Use `mcp_file` when a named profile inherits prompts but uses another MCP file.
 Environment paths are expanded in memory, not persisted as machine-specific
 paths. Unset/empty variables or non-absolute results are errors.

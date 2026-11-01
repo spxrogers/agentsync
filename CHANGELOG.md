@@ -28,6 +28,10 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Fixed
 
+- Keep Copilot command, subagent, and whole-agent imports working when managed
+  hooks are deployed. Unsupported hooks are warned and skipped without changing
+  their native/canonical files or ownership; explicit hook imports still fail,
+  including dry runs.
 - Refuse reconcile write-back of transformed Local Markdown and Copilot agents,
   command skills, and conditional instructions before generated banners or
   invocation metadata can corrupt canonical files. Copilot agent/command

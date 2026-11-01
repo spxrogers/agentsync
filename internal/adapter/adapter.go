@@ -443,6 +443,14 @@ type FileWriteBackGuard interface {
 	CheckFileWriteBack(op FileOp) error
 }
 
+// ComponentImportGuard is an optional extension for adapters that cannot import
+// a particular component. Import calls it for the requested selector before
+// ingesting native files. An empty component means a whole-agent import, which
+// may warn and skip unsupported components while capturing the others.
+type ComponentImportGuard interface {
+	CheckComponentImport(component string) error
+}
+
 // HookIngestGuard is an OPTIONAL extension to Adapter for agents whose hook
 // ingest REFUSES unrepresentable native events (unmodeled fields; on most
 // adapters also non-command handlers) rather than capturing a lossy subset. RefusedHookEvents re-reads the

@@ -205,6 +205,9 @@ shared cross-agent dir it writes into, and MUST return nil at project scope (see
   `FileWriteBackGuard` (optional interface, `CheckFileWriteBack(FileOp) error`:
   refuses unsafe verbatim copies of transformed Markdown before reconcile
   writes; implemented by generic/Copilot and Local);
+  `ComponentImportGuard` (optional interface, `CheckComponentImport(string) error`:
+  refuses an unsupported explicit selector before ingest without blocking
+  unrelated components or whole-agent import);
   `MCPSpecIngester` (optional interface, READ-ONLY — `IngestMCPSpec(raw
   map[string]any) source.MCPServerSpec`: the native→canonical inverse for ONE
   server entry of a key-merge MCP object, in the rendering adapter's own
@@ -829,8 +832,10 @@ participate in orphan retirement with backups and shared-owner protection.
 `mcp_file` can select the MCP file separately from inherited prompts. Paths are
 expanded without replacing canonical environment expressions. Conditional
 instructions use `memory/fragments/**/*.instructions.md`. Copilot command-skill
-import refuses fields/files that a canonical command cannot retain, and managed
-Copilot hooks explicitly refuse import. See the
+import refuses fields/files that a canonical command cannot retain; explicit
+Copilot hook selectors refuse import. Whole-agent and unrelated
+component imports warn and skip managed hooks, preserving native and canonical
+hook files. See the
 [harness contract](capability-matrix.md#vs-code-local-harness-profile-instructions).
 
 VS Code Local instruction discovery requires `chat.includeApplyingInstructions`

@@ -172,8 +172,9 @@ Local whole-agent import remains unsupported. Reconcile refuses transformed
 Local Markdown and Copilot agents/command skills/conditional instructions;
 edit canonical resources and apply, or use Copilot's component import for
 agents and commands. Removed or renamed conditional instructions are retired
-with native-edit backups and shared-owner protection. Managed Copilot hooks
-also refuse import. See the [capability matrix](/reference/capability-matrix/#vs-code-local-harness-profile-instructions)
+with native-edit backups and shared-owner protection. Explicit Copilot hook
+imports are refused; whole-agent and unrelated component imports warn and skip
+managed hooks without modifying them. See the [capability matrix](/reference/capability-matrix/#vs-code-local-harness-profile-instructions)
 for exact targets, metadata constraints, and conditional-memory import limits.
 
 ## Per-component files

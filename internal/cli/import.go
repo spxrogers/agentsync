@@ -198,6 +198,11 @@ func importRun(cmd *cobra.Command, args []string, dryRun bool) error {
 			"set AGENTSYNC_ALLOW_UNIMPLEMENTED=1 to import from its noop adapter anyway", agentName)
 	}
 
+	if guard, ok := a.(adapter.ComponentImportGuard); ok {
+		if err := guard.CheckComponentImport(component); err != nil {
+			return err
+		}
+	}
 	c, err := a.Ingest(sc, projectRoot)
 	if err != nil {
 		return fmt.Errorf("ingest %s: %w", agentName, err)

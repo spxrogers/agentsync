@@ -800,8 +800,12 @@ Copilot imports `.agent.md`, conditional instructions, and managed command skill
 refuses modified command invocation metadata or added bundled files that cannot
 be represented as a command. Conditional memory import follows the existing
 global-memory marker safeguards; without global memory or reversible source
-markers, edit canonical fragments and apply. Copilot hook import/write-back is
-explicitly refused when the managed hook file is present. LSP projection,
+markers, edit canonical fragments and apply. Explicit Copilot hook selectors
+(`import copilot:hook` and `import copilot:hook:<event>`) are refused, including
+with `--dry-run`. Whole-agent and unrelated component imports remain available
+when the managed hook file exists: they warn and skip hooks without reading the
+hook payload or changing native/canonical hook files or hook ownership.
+Hook write-back remains unsupported. LSP projection,
 custom `COPILOT_HOME`, experimental project `.mcp.json`, and automatic Hook
 protocol conversion are not implemented.
 
@@ -811,8 +815,9 @@ Regression coverage includes `TestCopilotHarnessResources`,
 `TestProfileMCPOverride`, `TestLoadVSCodeEnvironmentPath`,
 `TestReconcileVSCodeTransformedMarkdownRefusesWriteBack`,
 `TestVSCodeConditionalInstructionsLifecycle`,
-`TestVSCodeConditionalInstructionsKeepUnselectedOwner`, and
-`TestVSCodeSharedProjectDelegationAgent`.
+`TestVSCodeConditionalInstructionsKeepUnselectedOwner`,
+`TestVSCodeSharedProjectDelegationAgent`, and
+`TestImportCopilotHooksDoNotBlockOtherComponents`.
 Verify discovery in Agent Customizations and References; files being present
 does not establish model adherence. Local instruction discovery also requires
 `chat.includeApplyingInstructions` (default true).

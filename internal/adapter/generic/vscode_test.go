@@ -1,6 +1,7 @@
 package generic
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -12,6 +13,77 @@ import (
 	"github.com/spxrogers/agentsync/internal/source"
 	"github.com/spxrogers/agentsync/internal/untrusted"
 )
+
+func TestComponentImportGuardScope(t *testing.T) {
+	tests := []struct {
+		name      string
+		harness   string
+		component string
+		refuse    bool
+	}{
+		{name: "copilot hook", harness: "copilot", component: "hook", refuse: true},
+		{name: "copilot command", harness: "copilot", component: "command"},
+		{name: "copilot subagent", harness: "copilot", component: "subagent"},
+		{name: "copilot whole agent", harness: "copilot"},
+		{name: "factory hook", harness: "factory", component: "hook"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := New(Spec{Name: tc.harness}, Options{}).CheckComponentImport(tc.component)
+			if (err != nil) != tc.refuse {
+				t.Fatalf("CheckComponentImport(%q) = %v, refusal expected: %v", tc.component, err, tc.refuse)
+			}
+		})
+	}
+}
+
+func TestCopilotHooksAreSkippedDuringIngest(t *testing.T) {
+	for _, scope := range []adapter.Scope{adapter.ScopeUser, adapter.ScopeProject} {
+		t.Run(scope.String(), func(t *testing.T) {
+			home := t.TempDir()
+			var spec Spec
+			for _, candidate := range Specs() {
+				if candidate.Name == "copilot" {
+					spec = candidate
+				}
+			}
+			native := filepath.Join(home, ".copilot")
+			if scope == adapter.ScopeProject {
+				native = filepath.Join(home, ".github")
+			}
+			agents := filepath.Join(native, "agents")
+			if err := os.MkdirAll(agents, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(agents, "reviewer.agent.md"), []byte("---\ndescription: Review changes\n---\nReview only.\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			hookPath := filepath.Join(native, "hooks", "agentsync.json")
+			if err := os.MkdirAll(filepath.Dir(hookPath), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			var warnings bytes.Buffer
+			a := New(spec, Options{TargetRoot: home, Stderr: &warnings})
+			for _, content := range []string{`{"version":1,"hooks":{"preToolUse":[{"type":"command","command":"review-hook"}]}}`, "{"} {
+				if err := os.WriteFile(hookPath, []byte(content), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				warnings.Reset()
+				got, err := a.Ingest(scope, home)
+				if err != nil || len(got.Subagents) != 1 || len(got.Hooks) != 0 || !strings.Contains(warnings.String(), "hooks were not captured") {
+					t.Fatalf("hook file blocked unrelated ingest: %v %+v %s", err, got, warnings.String())
+				}
+			}
+			if err := os.Remove(hookPath); err != nil {
+				t.Fatal(err)
+			}
+			warnings.Reset()
+			if _, err := a.Ingest(scope, home); err != nil || warnings.Len() != 0 {
+				t.Fatalf("absent hooks caused an error or warning: %v %s", err, warnings.String())
+			}
+		})
+	}
+}
 
 func TestVSCodeFileWriteBackGuardScope(t *testing.T) {
 	tests := []struct {

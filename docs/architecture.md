@@ -267,7 +267,8 @@ comments in the rewritten file (a documented v1 limit).
 Several **optional** extensions sit beside the core interface — an adapter
 implements one only if the agent has the concept, and callers type-assert for
 it: `PluginIngester` (below), `MCPSpecIngester`, `FileWriteBackGuard`,
-`HookIngestGuard`, `HookEventNamer`, `VersionedDirs` and `WarnEmitter`. The first two are
+`ComponentImportGuard`, `HookIngestGuard`, `HookEventNamer`, `VersionedDirs`
+and `WarnEmitter`. The first two are
 **read-only by construction**: they exist to let the *capture* direction ask the
 adapter a question, and neither has a `Render`-side counterpart.
 
@@ -912,6 +913,16 @@ the whole class. An adapter that renders an MCP key-merge op without declaring
 its inverse is REFUSED rather than guessed at, and the registry-wide guard
 `TestMCPSpecIngester_CoversEveryKeyMergeMCPRenderer` turns that state into a
 failing test.
+
+**Unsupported import components are isolated.** The optional
+`adapter.ComponentImportGuard` (`CheckComponentImport(component string) error`)
+checks the requested selector before native ingest. Copilot refuses explicit
+`hook` imports, including dry runs, but permits whole-agent and unrelated
+component imports. Its ingest warns when the managed hook file is present and
+leaves those hooks uncaptured without reading their payload. This is not
+`HookIngestGuard`: unsupported Copilot hooks do not trigger stale canonical hook
+retirement. Native hook files, canonical hook files, and their ownership remain
+untouched. Regression: `TestImportCopilotHooksDoNotBlockOtherComponents`.
 
 **Transformed Markdown is not a verbatim source.** The optional
 `adapter.FileWriteBackGuard` (`CheckFileWriteBack(op FileOp) error`) lets the
