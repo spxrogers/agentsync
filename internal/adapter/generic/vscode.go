@@ -12,6 +12,38 @@ import (
 	"github.com/spxrogers/agentsync/internal/source"
 )
 
+func (a *Adapter) CheckFileWriteBack(op adapter.FileOp) error {
+	if a.spec.Name != "copilot" {
+		return nil
+	}
+	return CheckVSCodeFileWriteBack(op, a.spec.Name)
+}
+
+// CheckVSCodeFileWriteBack prevents rendered banners and invocation metadata
+// from entering canonical Markdown through reconcile's verbatim-copy path.
+func CheckVSCodeFileWriteBack(op adapter.FileOp, harness string) error {
+	id := filepath.ToSlash(op.SourceID)
+	kind := ""
+	switch {
+	case strings.HasPrefix(id, "commands/"):
+		kind = "command"
+	case strings.HasPrefix(id, source.SubagentsDir+"/"):
+		kind = "subagent"
+	case strings.HasPrefix(id, "memory/fragments/"):
+		kind = "memory"
+	case harness == "vscode-local" && id == "memory/AGENTS.md":
+		kind = "memory"
+	default:
+		return nil
+	}
+	remedy := "edit the canonical source and apply, or use [o]verride / [i]gnore"
+	if harness == "copilot" && kind != "memory" {
+		name := strings.TrimSuffix(filepath.Base(id), ".md")
+		remedy = fmt.Sprintf("use `agentsync import copilot:%s:%s` to capture the native component, or %s", kind, name, remedy)
+	}
+	return fmt.Errorf("write-back for %s is refused: %s renders transformed Markdown that cannot be copied verbatim into canonical source; %s", op.Path, harness, remedy)
+}
+
 func RenderVSCodeInstructions(fragments map[string]string, harness, home, profile string, scope adapter.Scope, project string) ([]adapter.FileOp, error) {
 	dir := filepath.Join(home, ".copilot", "instructions")
 	if harness == "vscode-local" {
@@ -264,7 +296,7 @@ func vscodeAgentFrontmatter(original map[string]any, harness string) (map[string
 			if mapped, exists := aliases[tool]; exists {
 				tool = mapped
 			}
-			if harness == "copilot" && tool == "agent/runSubagent" {
+			if tool == "agent/runSubagent" {
 				tool = "agent"
 			}
 			if harness == "copilot" && !strings.Contains(tool, "/") && tool != "*" {

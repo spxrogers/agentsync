@@ -13,6 +13,38 @@ import (
 	"github.com/spxrogers/agentsync/internal/untrusted"
 )
 
+func TestVSCodeFileWriteBackGuardScope(t *testing.T) {
+	tests := []struct {
+		name    string
+		harness string
+		id      string
+		refuse  bool
+	}{
+		{name: "copilot command", harness: "copilot", id: "commands/verify.md", refuse: true},
+		{name: "copilot agent", harness: "copilot", id: "subagents/reviewer.md", refuse: true},
+		{name: "copilot instruction", harness: "copilot", id: "memory/fragments/nested/python.instructions.md", refuse: true},
+		{name: "copilot global memory", harness: "copilot", id: "memory/AGENTS.md"},
+		{name: "local global memory", harness: "vscode-local", id: "memory/AGENTS.md", refuse: true},
+		{name: "local bundled skill", harness: "vscode-local", id: "skills/review/references/check.txt"},
+		{name: "copilot skill", harness: "copilot", id: "skills/review/SKILL.md"},
+		{name: "other generic command", harness: "zed", id: "commands/verify.md"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			op := adapter.FileOp{SourceID: filepath.FromSlash(tc.id)}
+			var err error
+			if tc.harness == "vscode-local" {
+				err = CheckVSCodeFileWriteBack(op, tc.harness)
+			} else {
+				err = New(Spec{Name: tc.harness}, Options{}).CheckFileWriteBack(op)
+			}
+			if (err != nil) != tc.refuse {
+				t.Fatalf("CheckFileWriteBack(%q) = %v, refusal expected: %v", tc.id, err, tc.refuse)
+			}
+		})
+	}
+}
+
 func TestCopilotHarnessResources(t *testing.T) {
 	home := t.TempDir()
 	var spec Spec

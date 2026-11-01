@@ -168,7 +168,11 @@ Do not `@import` them into global memory unless they should also apply globally.
 Copilot hooks default to disabled. `[copilot] hooks_enabled = true` only enables
 reviewed native camelCase command handlers without matchers. Hook scripts are
 not automatically converted between Local, Copilot, and Claude protocols.
-Local whole-agent import/write-back remains unsupported; managed Copilot hooks
+Local whole-agent import remains unsupported. Reconcile refuses transformed
+Local Markdown and Copilot agents/command skills/conditional instructions;
+edit canonical resources and apply, or use Copilot's component import for
+agents and commands. Removed or renamed conditional instructions are retired
+with native-edit backups and shared-owner protection. Managed Copilot hooks
 also refuse import. See the [capability matrix](/reference/capability-matrix/#vs-code-local-harness-profile-instructions)
 for exact targets, metadata constraints, and conditional-memory import limits.
 

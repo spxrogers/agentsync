@@ -434,6 +434,15 @@ type MCPSpecIngester interface {
 	IngestMCPSpec(raw map[string]any) source.MCPServerSpec
 }
 
+// FileWriteBackGuard is an optional extension for adapters whose whole-file
+// projections are not safe to copy verbatim into the canonical source.
+// Reconcile calls it before every file-level write-back, including automatic
+// and bulk actions. A refusal must explain how to capture or preserve the edit.
+// Key-level MCP write-back continues through MCPSpecIngester and capture.Capture.
+type FileWriteBackGuard interface {
+	CheckFileWriteBack(op FileOp) error
+}
+
 // HookIngestGuard is an OPTIONAL extension to Adapter for agents whose hook
 // ingest REFUSES unrepresentable native events (unmodeled fields; on most
 // adapters also non-command handlers) rather than capturing a lossy subset. RefusedHookEvents re-reads the

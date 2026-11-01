@@ -111,8 +111,9 @@ already state-owned by definition, so the writer's per-file backup path skips
 them and overwrites directly — the hand edit is simply lost, with no
 per-file copy of it kept. **orphan**/**orphan-drifted** are hedged with "if
 `apply` still reclaims that kind of file": `apply` only reclaims a
-skill/subagent/command destination when its source stops rendering it — for
-every other kind (memory, MCP/hook/LSP entries), `status` still reports the
+skill/subagent/command or standalone conditional-instruction destination when
+its source stops rendering it — for every other kind (global memory, ordinary
+memory fragments, MCP/hook/LSP entries), `status` still reports the
 class, but the next `apply` doesn't touch the destination at all; it simply
 drops the stale bookkeeping. `status`/`diff`/`reconcile` are how you catch a
 drift/conflict/orphan-drifted item BEFORE the next `apply` acts on it; a
@@ -313,8 +314,12 @@ There is no product-name based fallback and no writes across all profiles.
 `AGENTSYNC_TARGET_ROOT` redirects this target beneath the sandbox even when
 the configured profile path is real. Existing sibling instruction files are
 preserved; an unmanaged same-name collision is refused. Repeated apply is a no-op.
-No profile Git repository is initialized. Local whole-agent import/reconcile
-write-back remains unsupported; edit canonical resources and apply instead.
+No profile Git repository is initialized. Local whole-agent import remains
+unsupported. Reconcile refuses transformed Local Markdown and Copilot
+agents/command skills/conditional instructions; use canonical edits and apply,
+or Copilot's component import for agents and commands. Removed or renamed
+conditional instructions are retired with native-edit backups and shared-owner
+protection.
 Environment expressions remain in config and resolve only in memory; unset or
 empty variables and non-absolute results fail. `mcp_file` selects a separate MCP
 location for profiles inheriting prompts. Project-only rendering needs neither.

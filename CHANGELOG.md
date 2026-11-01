@@ -28,6 +28,15 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Fixed
 
+- Refuse reconcile write-back of transformed Local Markdown and Copilot agents,
+  command skills, and conditional instructions before generated banners or
+  invocation metadata can corrupt canonical files. Copilot agent/command
+  component import remains available through the native inverse.
+- Retire removed or renamed conditional instructions on apply, backing up native
+  edits and respecting shared ownership. Normalize SourceID separators so Windows
+  deployments use the same orphan policy.
+- Normalize the delegation tool alias consistently for Local and Copilot so
+  shared project agents do not fail apply with conflicting content.
 - Compare Windows file permissions using the owner-write (read-only) bit in status, diff, explain, and apply. Equivalent 0666/0644 modes no longer cause repeated writes. Unix permission detection remains unchanged.
 
 ### Added

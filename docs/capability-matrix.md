@@ -761,12 +761,17 @@ Conditional instructions come from `memory/fragments/**/*.instructions.md`.
 They require native `applyTo` or `description` frontmatter; supported fields are
 `name`, `description`, and `applyTo`. Other fragments remain ordinary reusable
 memory. Do not `@import` a conditional file into global memory unless it should
-also be unconditional. The generated global filename is reserved.
+also be unconditional. The generated global filename is reserved. Removing or
+renaming a conditional fragment retires its tracked native file on the next
+apply, backing up native edits first and preserving files held by another
+agent. Global memory and ordinary fragments are not reclaimed.
 
 Agent metadata is validated per harness. `target: vscode` and
 `target: github-copilot` select the matching harness. Unsupported fields cause
 the whole component to be skipped with a reason, rather than dropping tool
-restrictions. Common Claude tool aliases are normalized; model values are
+restrictions. Common Claude tool aliases are normalized; `agent/runSubagent`
+uses the shared `agent` alias in both Local and Copilot so a project agent
+renders identical bytes for both harnesses. Model values are
 native harness identifiers, not translated model aliases. Copilot agents require
 a nonempty description. Local commands retain native prompt metadata; Copilot
 commands accept only `description` and `argument-hint`, become user-invocable
@@ -782,8 +787,16 @@ PascalCase events and Claude/Local payloads are not automatically migrated.
 Hook locations may be discovered by multiple harnesses: the opt-in does not
 isolate a script from Local discovery. Review that deployment before enabling it.
 
-Local whole-agent import/reconcile write-back remains unsupported. Copilot
-imports `.agent.md`, conditional instructions, and managed command skills, but
+Local whole-agent import remains unsupported. Reconcile refuses direct
+write-back of Local global/conditional instructions, agents, and prompts, and
+of Copilot conditional instructions, agents, and command skills. These are
+transformed Markdown, not verbatim canonical files: copying their generated
+frontmatter, banners, or invocation metadata back would corrupt the source.
+For Local Markdown and conditional instructions, edit canonical resources and
+apply. For Copilot agents/commands, use `import copilot:subagent:<name>` or
+`import copilot:command:<name>` to capture through the adapter's inverse instead.
+Exact skill files and MCP-server key write-back retain their existing paths.
+Copilot imports `.agent.md`, conditional instructions, and managed command skills, but
 refuses modified command invocation metadata or added bundled files that cannot
 be represented as a command. Conditional memory import follows the existing
 global-memory marker safeguards; without global memory or reversible source
@@ -795,7 +808,11 @@ protocol conversion are not implemented.
 Regression coverage includes `TestCopilotHarnessResources`,
 `TestCopilotHarnessRoundTrip`, `TestCopilotHooksRequireReviewAndNativeEvents`,
 `TestLocalHarnessResources`, `TestSharedProjectAgentIsIdentical`,
-`TestProfileMCPOverride`, and `TestLoadVSCodeEnvironmentPath`.
+`TestProfileMCPOverride`, `TestLoadVSCodeEnvironmentPath`,
+`TestReconcileVSCodeTransformedMarkdownRefusesWriteBack`,
+`TestVSCodeConditionalInstructionsLifecycle`,
+`TestVSCodeConditionalInstructionsKeepUnselectedOwner`, and
+`TestVSCodeSharedProjectDelegationAgent`.
 Verify discovery in Agent Customizations and References; files being present
 does not establish model adherence. Local instruction discovery also requires
 `chat.includeApplyingInstructions` (default true).

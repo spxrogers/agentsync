@@ -332,8 +332,13 @@ There is no product-name based fallback and no writes across all profiles.
 `AGENTSYNC_TARGET_ROOT` redirects this target beneath the sandbox even when
 the configured profile path is real. Existing sibling instruction files are
 preserved; an unmanaged same-name collision is refused. Repeated apply is a no-op.
-No profile Git repository is initialized. Local whole-agent import/reconcile
-write-back is unsupported; edit canonical resources and apply instead.
+No profile Git repository is initialized. Local whole-agent import is
+unsupported. Reconcile refuses transformed Local Markdown and Copilot
+agents/command skills/conditional instructions rather than copying generated
+metadata into canonical source. Edit canonical resources and apply, or use
+Copilot's component import for agents and commands. Removed or renamed
+conditional instructions are retired with native-edit backups and shared-owner
+protection.
 Use `mcp_file` when a named profile inherits prompts but uses another MCP file.
 Environment paths are expanded in memory, not persisted as machine-specific
 paths. Unset/empty variables or non-absolute results are errors.

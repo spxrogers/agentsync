@@ -202,6 +202,9 @@ shared cross-agent dir it writes into, and MUST return nil at project scope (see
 [architecture § VersionedDirs](architecture.md#versioneddirs-optional)).
 - **Key:** `Adapter` (interface); `PathKeyMerger`, `MergeStrategyForPath`; `DestWriter` (interface);
   `VersionedDirs` (optional interface, `VersionRoots`); `NonEmptyDirs` (helper);
+  `FileWriteBackGuard` (optional interface, `CheckFileWriteBack(FileOp) error`:
+  refuses unsafe verbatim copies of transformed Markdown before reconcile
+  writes; implemented by generic/Copilot and Local);
   `MCPSpecIngester` (optional interface, READ-ONLY — `IngestMCPSpec(raw
   map[string]any) source.MCPServerSpec`: the native→canonical inverse for ONE
   server entry of a key-merge MCP object, in the rendering adapter's own
@@ -496,7 +499,8 @@ cleanup ops for orphaned owned keys — built by `adapter.NewCleanupOp` and stam
 `adapter.OpCleanup`, so consumers identify them by kind rather than by shape)
 and **whole-file components** whose
 `source_id` is under `skills/`, `subagents/`, `commands/`, or the retired
-`agents/` spelling — a destination whose source no longer renders it is deleted,
+`agents/` spelling, plus conditional `memory/fragments/**/*.instructions.md`
+files — a destination whose source no longer renders it is deleted,
 backing up a hand-edit first, and SKIPPED (with the state entry kept, so the next
 apply retries) when it cannot be read. `Plan` also validates
 every component id that becomes a destination filename — subagent/command/skill
@@ -816,8 +820,12 @@ There is no product-name based fallback and no writes across all profiles.
 `AGENTSYNC_TARGET_ROOT` redirects this target beneath the sandbox even when
 the configured profile path is real. Existing sibling instruction files are
 preserved; an unmanaged same-name collision is refused. Repeated apply is a no-op.
-No profile Git repository is initialized. Local whole-agent import/reconcile
-write-back remains unsupported; edit canonical resources and apply instead.
+No profile Git repository is initialized. Local whole-agent import remains
+unsupported. `FileWriteBackGuard` refuses transformed Local Markdown and Copilot
+agents/command skills/conditional instructions before reconcile can copy
+generated metadata into canonical files. Use canonical edits and apply, or
+Copilot's component import for agents and commands. Conditional instructions
+participate in orphan retirement with backups and shared-owner protection.
 `mcp_file` can select the MCP file separately from inherited prompts. Paths are
 expanded without replacing canonical environment expressions. Conditional
 instructions use `memory/fragments/**/*.instructions.md`. Copilot command-skill

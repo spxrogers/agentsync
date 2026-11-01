@@ -141,6 +141,10 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 	return source.Canonical{}, fmt.Errorf("vscode-local import/write-back is unsupported; edit canonical resources and apply")
 }
 
+func (a *Adapter) CheckFileWriteBack(op adapter.FileOp) error {
+	return generic.CheckVSCodeFileWriteBack(op, a.Name())
+}
+
 func (a *Adapter) IngestMCPSpec(raw map[string]any) source.MCPServerSpec {
 	return generic.New(generic.Spec{MCP: generic.MCPTarget{RootKey: "servers", TransportKey: "type"}}, generic.Options{}).IngestMCPSpec(raw)
 }

@@ -266,8 +266,8 @@ comments in the rewritten file (a documented v1 limit).
 
 Several **optional** extensions sit beside the core interface — an adapter
 implements one only if the agent has the concept, and callers type-assert for
-it: `PluginIngester` (below), `MCPSpecIngester`, `HookIngestGuard`,
-`HookEventNamer`, `VersionedDirs` and `WarnEmitter`. The first two are
+it: `PluginIngester` (below), `MCPSpecIngester`, `FileWriteBackGuard`,
+`HookIngestGuard`, `HookEventNamer`, `VersionedDirs` and `WarnEmitter`. The first two are
 **read-only by construction**: they exist to let the *capture* direction ask the
 adapter a question, and neither has a `Render`-side counterpart.
 
@@ -913,10 +913,24 @@ its inverse is REFUSED rather than guessed at, and the registry-wide guard
 `TestMCPSpecIngester_CoversEveryKeyMergeMCPRenderer` turns that state into a
 failing test.
 
-**The whole-file arm applies the same rule from the other side.** It copies the
-destination verbatim into the canonical file the SourceID names — right for the
-text components (skills, subagents, commands, memory), whose canonical form *is*
-the rendered text, and wrong for the structured, secret-bearing kinds
+**Transformed Markdown is not a verbatim source.** The optional
+`adapter.FileWriteBackGuard` (`CheckFileWriteBack(op FileOp) error`) lets the
+rendering adapter refuse a whole-file copy before reconcile writes anything.
+The check is shared by interactive, bulk, and automatic write-back. Copilot
+refuses direct write-back of agents, command skills, and conditional
+instructions: generated banners, tool aliases, and invocation metadata must not
+enter canonical Markdown. Use `import copilot:subagent:<name>` or
+`import copilot:command:<name>` for those components; conditional instructions
+remain canonical-edit/apply only. Local refuses its transformed Markdown,
+including global memory with generated `applyTo` frontmatter. Exact skill files
+and key-level MCP capture retain their existing paths. Regression:
+`TestReconcileVSCodeTransformedMarkdownRefusesWriteBack` verifies refusal leaves
+canonical files unchanged and Copilot command/agent import remains usable.
+
+**The whole-file arm applies the same rule from the other side.** After that
+adapter guard, it copies the destination verbatim into the canonical file the
+SourceID names — right for text components whose canonical form *is* the
+rendered text, and wrong for the structured, secret-bearing kinds
 `walkSecretFields` visits — so a SourceID under `mcp/`, `lsp/` or `hooks/` is
 refused there by kind, with `agentsync import <agent>:<component>:<name>` as the
 remedy (it captures the edit through the adapter's `Ingest` and
@@ -1032,9 +1046,13 @@ production caller today.
 a removed component doesn't linger in the destination: emptied key-merge sections
 (an MCP/hook/LSP section whose source went empty — cleaned via a synthesized
 empty-merge op) and **whole-file components** whose `source_id` is under
-`skills/`, `subagents/`, `commands/`, or the RETIRED `agents/` spelling — a whole
-skill, one bundled `scripts/`/`references/`/`assets/` file within one, a
-subagent, or a slash command that the source no longer renders. The retired
+`skills/`, `subagents/`, `commands/`, or the RETIRED `agents/` spelling, plus
+standalone conditional instructions under `memory/fragments/**/*.instructions.md`
+— a whole skill, one bundled `scripts/`/`references/`/`assets/` file within one,
+a subagent, a slash command, or a conditional instruction that the source no
+longer renders. SourceID separators are normalized before classification so
+Windows-rendered paths follow the same policy. Global memory and ordinary
+memory fragments are not reclaimed. The retired
 prefix is listed because the canonical `agents/` → `subagents/` rename ships in
 the same release as namespacing: an upgrading user's state still holds the old
 spelling, and the only rewriter runs from `migrate subagents`, which no-ops for a
