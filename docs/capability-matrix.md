@@ -193,7 +193,7 @@ guessed.
 | **firebase** | `.idx/airules.md` | ✓ `.idx/mcp.json` (project) | ✗ publishes skills for other agents |
 | **antigravity** | `AGENTS.md` | ✓ `~/.gemini/config/mcp_config.json` (remote key `serverUrl`; the shared IDE+CLI path is codelab-sourced — older installs read `~/.gemini/antigravity-cli/mcp_config.json`, where this write is a no-op; re-verify when Antigravity's docs firm up. Lives inside `~/.gemini/`, the deep Gemini adapter's directory, but a different file — no collision) | ✓ `.agents/skills/` (project; global path disputed, omitted) |
 | **augmentcode** | `.augment/rules/` (+ user) | ✗ IDE app-storage | ✓ `.agents/skills/` (+ user) |
-| **copilot** | `.github/copilot-instructions.md` | ✓ `.vscode/mcp.json` (`servers` key, `type`) | ✓ `.github/skills/` · `~/.copilot/skills/` |
+| **copilot** | `.github/copilot-instructions.md` · `~/.copilot/copilot-instructions.md` | ✓ `.vscode/mcp.json` (`servers` key, `type`) | ✓ `.github/skills/` · `~/.copilot/skills/` |
 | **copilot-cli** | `AGENTS.md` | ✓ `~/.copilot/mcp-config.json` (`type`, stdio="local") | ✓ `.agents/skills/` (+ user) |
 | **crush** | `AGENTS.md` | ✓ crush.json `mcp` key (+ user) | ✓ `.agents/skills/` · `~/.config/crush/skills/` |
 | **factory** | `AGENTS.md` · `~/.factory/AGENTS.md` | ✓ `.factory/mcp.json` · `~/.factory/mcp.json` (`type`) | ✓ `.agents/skills/` (+ user) |

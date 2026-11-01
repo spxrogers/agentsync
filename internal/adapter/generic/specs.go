@@ -129,8 +129,11 @@ func Specs() []Spec {
 			Memory: FileTarget{Project: ".idx/airules.md"},
 			MCP:    MCPTarget{Project: ".idx/mcp.json"},
 		},
-		// GitHub Copilot (VS Code) — `.github/copilot-instructions.md`; MCP
-		// `.vscode/mcp.json` under `servers` with explicit `type`.
+		// GitHub Copilot (VS Code) — project rules `.github/copilot-instructions.md`
+		// plus the harness's user-level instructions `~/.copilot/copilot-instructions.md`
+		// (the user-scope counterpart of the project rules file, next to the
+		// `.copilot/skills` user dir); MCP `.vscode/mcp.json` under `servers` with
+		// explicit `type`.
 		//
 		// NOT auto-detectable (no DetectBin, no DetectDir): Copilot is a VS Code
 		// extension with no stable user-home install marker — its config lives in
@@ -141,7 +144,7 @@ func Specs() []Spec {
 		// docs/capability-matrix.md → "Breadth tier / detection".
 		{
 			Name:   "copilot",
-			Memory: FileTarget{Project: ".github/copilot-instructions.md"},
+			Memory: FileTarget{User: ".copilot/copilot-instructions.md", Project: ".github/copilot-instructions.md"},
 			MCP:    MCPTarget{Project: ".vscode/mcp.json", RootKey: "servers", TransportKey: "type"},
 			Skills: FileTarget{User: ".copilot/skills", Project: ".github/skills"},
 		},

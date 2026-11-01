@@ -12,6 +12,7 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 ### Added
 
 - Opt-in vscode-local instructions target with explicit profile prompts_home, applyTo frontmatter, sandbox redirection, same-name collision protection and shared Windows permission semantics. Existing Copilot skill destinations remain separate.
+- The breadth `copilot` row now also renders user-scope memory to `~/.copilot/copilot-instructions.md` (the Copilot harness user-level instructions file, next to its `~/.copilot/skills` user dir), so global instructions sync there without an external copy step.
 
 ### Fixed
 
