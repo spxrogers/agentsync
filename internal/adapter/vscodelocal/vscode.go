@@ -13,11 +13,15 @@ import (
 	"github.com/spxrogers/agentsync/internal/source"
 )
 
-const FileName = "agentsync.instructions.md"
-const Frontmatter = "---\napplyTo: \"**\"\n---\n\n"
+const (
+	FileName    = "agentsync.instructions.md"
+	Frontmatter = "---\napplyTo: \"**\"\n---\n\n"
+)
 
-type Options struct{ RedirectRoot string }
-type Adapter struct{ opts Options }
+type (
+	Options struct{ RedirectRoot string }
+	Adapter struct{ opts Options }
+)
 
 func New(opts Options) *Adapter             { return &Adapter{opts: opts} }
 func (a *Adapter) Name() string             { return "vscode-local" }
