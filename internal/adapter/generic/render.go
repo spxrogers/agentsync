@@ -13,9 +13,9 @@ import (
 
 // Render projects the canonical model into this breadth-tier agent's memory
 // (rules) file, its mcpServers JSON, its Agent-Skills directory, and, when the
-// spec declares one, its hooks.json. Subagents, commands, and LSP are always
-// reported as skips. Hooks are a skip unless the spec declares a hooks file
-// (Factory Droid). A component the spec does not support at the requested
+// spec declares one, its hooks.json. Copilot also projects native agents,
+// instructions, manual command skills, and explicitly enabled command hooks.
+// Other unsupported components are reported as skips at the requested
 // scope (e.g. user-scope memory for a project-only agent) is likewise reported
 // as a skip rather than written somewhere wrong.
 func (a *Adapter) Render(r secrets.Resolved, scope adapter.Scope, project string) ([]adapter.FileOp, []adapter.Skip, error) {
@@ -78,6 +78,28 @@ func (a *Adapter) Render(r secrets.Resolved, scope adapter.Scope, project string
 	}
 
 	// Components the breadth tier does not project — reported, never silent.
+	if a.spec.Name == "copilot" {
+		extra, extraSkips, err := RenderVSCodeResources(renderC, "copilot", a.opts.TargetRoot, "", scope, project)
+		if err != nil {
+			return nil, nil, err
+		}
+		ops = append(ops, extra...)
+		skips = append(skips, extraSkips...)
+		instructionOps, err := RenderVSCodeInstructions(renderC.Memory.Fragments, "copilot", a.opts.TargetRoot, "", scope, project)
+		if err != nil {
+			return nil, nil, err
+		}
+		ops = append(ops, instructionOps...)
+		hookOps, hookSkips, err := renderCopilotHooks(renderC, a.opts.TargetRoot, scope, project)
+		if err != nil {
+			return nil, nil, err
+		}
+		ops = append(ops, hookOps...)
+		skips = append(skips, hookSkips...)
+		renderC.Subagents = nil
+		renderC.Commands = nil
+		renderC.Hooks = nil
+	}
 	skips = append(skips, a.unsupportedSkips(renderC)...)
 	return ops, skips, nil
 }
@@ -120,6 +142,7 @@ func (a *Adapter) renderSkills(c source.Canonical, scope adapter.Scope, project 
 // the spec has no MCP target at this scope.
 func (a *Adapter) renderMCP(c source.Canonical, scope adapter.Scope, project string) ([]adapter.FileOp, []adapter.Skip, error) {
 	mcpPath := a.mcpPath(scope, project)
+	dialect := a.mcpDialect(scope)
 	servers := map[string]any{}
 	var skips []adapter.Skip
 	for _, m := range c.MCPServers {
@@ -137,12 +160,13 @@ func (a *Adapter) renderMCP(c source.Canonical, scope adapter.Scope, project str
 			})
 			continue
 		}
-		servers[m.ID] = mcpServerMap(a.spec.MCP, m.Server)
+		server := mcpServerMap(dialect, m.Server)
+		servers[m.ID] = server
 	}
 	if len(servers) == 0 {
 		return nil, skips, nil
 	}
-	ours := map[string]any{a.spec.MCP.rootKey(): servers}
+	ours := map[string]any{dialect.rootKey(): servers}
 	body, err := json.MarshalIndent(ours, "", "  ")
 	if err != nil {
 		return nil, nil, fmt.Errorf("marshal %s mcp: %w", a.spec.Name, err)

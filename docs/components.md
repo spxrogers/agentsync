@@ -202,6 +202,12 @@ shared cross-agent dir it writes into, and MUST return nil at project scope (see
 [architecture § VersionedDirs](architecture.md#versioneddirs-optional)).
 - **Key:** `Adapter` (interface); `PathKeyMerger`, `MergeStrategyForPath`; `DestWriter` (interface);
   `VersionedDirs` (optional interface, `VersionRoots`); `NonEmptyDirs` (helper);
+  `FileWriteBackGuard` (optional interface, `CheckFileWriteBack(FileOp) error`:
+  refuses unsafe verbatim copies of transformed Markdown before reconcile
+  writes; implemented by generic/Copilot and Local);
+  `ComponentImportGuard` (optional interface, `CheckComponentImport(string) error`:
+  refuses an unsupported explicit selector before ingest without blocking
+  unrelated components or whole-agent import);
   `MCPSpecIngester` (optional interface, READ-ONLY — `IngestMCPSpec(raw
   map[string]any) source.MCPServerSpec`: the native→canonical inverse for ONE
   server entry of a key-merge MCP object, in the rendering adapter's own
@@ -496,7 +502,8 @@ cleanup ops for orphaned owned keys — built by `adapter.NewCleanupOp` and stam
 `adapter.OpCleanup`, so consumers identify them by kind rather than by shape)
 and **whole-file components** whose
 `source_id` is under `skills/`, `subagents/`, `commands/`, or the retired
-`agents/` spelling — a destination whose source no longer renders it is deleted,
+`agents/` spelling, plus conditional `memory/fragments/**/*.instructions.md`
+files — a destination whose source no longer renders it is deleted,
 backing up a hand-edit first, and SKIPPED (with the state entry kept, so the next
 apply retries) when it cannot be read. `Plan` also validates
 every component id that becomes a destination filename — subagent/command/skill
@@ -791,3 +798,51 @@ they're the foundation; `ui` (presentation) builds only on `untrusted`, and
 `log` only on `ui` (it wires `ui.SlogHandler` in as the slog default). See the
 rendered dependency graph in
 [architecture §12](architecture.md#12-package-layering).
+
+
+## Host permission semantics
+
+Permission drift uses the same comparison in diagnostics and the writer. On Windows, only the owner-write bit is compared because Go chmod represents the read-only attribute; group, other, and execute bits cannot be applied independently. Unix still compares all nine permission bits. This prevents content-identical files from repeatedly appearing changed on Windows while retaining detection of read-only drift. The shared comparison lives in internal/filemode; regression coverage includes TestPermissionSemantics, TestHostPermissionDrift, and TestWriterHostPermissionConvergence.
+
+
+## VS Code Local harness profile instructions
+
+The opt-in `vscode-local` adapter renders profile instructions, agents, prompts,
+conditional instructions, native skills, and MCP. `generic/vscode.go` owns shared
+Markdown projection and Copilot-specific agents, manual command skills,
+conditional instructions, and opt-in native command hooks. Generic MCP dialects
+are scope-aware for Copilot (`servers`/`stdio` in projects,
+`mcpServers`/`local` at user scope). BYOK and editor settings are not managed.
+
+Enable `[agents.vscode-local] enabled = true` and configure an absolute
+`[vscode_local] prompts_home = '${env:APPDATA}/Code/User/prompts'` in
+`agentsync.toml`. First verify the running editor's actual `currentProfile.promptsHome`.
+Select the effective prompts directory explicitly for default/named profiles,
+profiles inheriting default prompts, portable installs or custom user-data-dir.
+There is no product-name based fallback and no writes across all profiles.
+`AGENTSYNC_TARGET_ROOT` redirects this target beneath the sandbox even when
+the configured profile path is real. Existing sibling instruction files are
+preserved; an unmanaged same-name collision is refused. Repeated apply is a no-op.
+No profile Git repository is initialized. Local whole-agent import remains
+unsupported. `FileWriteBackGuard` refuses transformed Local Markdown and Copilot
+agents/command skills/conditional instructions before reconcile can copy
+generated metadata into canonical files. Use canonical edits and apply, or
+Copilot's component import for agents and commands. Conditional instructions
+participate in orphan retirement with backups and shared-owner protection.
+`mcp_file` can select the MCP file separately from inherited prompts. Paths are
+expanded without replacing canonical environment expressions. Conditional
+instructions use `memory/fragments/**/*.instructions.md`. Copilot command-skill
+import refuses fields/files that a canonical command cannot retain; explicit
+Copilot hook selectors refuse import. Whole-agent and unrelated
+component imports warn and skip managed hooks, preserving native and canonical
+hook files. See the
+[harness contract](capability-matrix.md#vs-code-local-harness-profile-instructions).
+
+VS Code Local instruction discovery requires `chat.includeApplyingInstructions`
+(default true). The adapter does not rewrite editor settings. Verify the selected
+Local harness in Agent Customizations and then References in a representative
+request; file discovery alone does not prove model adherence. Sending a BYOK
+request may incur costs and is a separate validation step.
+
+Sources: https://code.visualstudio.com/docs/agent-customization/custom-instructions
+and https://code.visualstudio.com/docs/agents/reference/ai-settings .

@@ -30,7 +30,7 @@ nothing is dropped silently.
 | **Roo Code** | ✅ Adapter (some components projected) | MCP, memory, and slash commands — clean filesystem `.roo/` paths (rulesync and ruler converged on these). **MCP → `.roo/mcp.json`** (project-level, `mcpServers` with explicit `type: streamable-http`/`sse` for remote + `url`/`headers`; merge-by-server-name preserves foreign servers). Roo's *global* MCP lives in VS Code globalStorage (OS/editor-specific), which agentsync intentionally does **not** target — so user-scope MCP is reported as a skip. **Memory → `.roo/rules/agentsync.md`** (plain-markdown always-applied rule) and **commands → `.roo/commands/<name>.md`** (markdown + frontmatter — Roo keeps **both** `description` *and* `argument-hint`; only `allowed-tools` drops), both at **user and project scope** (`~/.roo/` + `<repo>/.roo/`). **Skills, hooks, and LSP** have no Roo concept, and Roo's "custom modes" are not per-file **subagents**, so all four are skipped. No `PluginIngester`; it still *receives* plugin-projected components on `apply`. |
 | **Cline** | ✅ Adapter (scope-asymmetric) | MCP, memory, and slash commands. **MCP → `~/.cline/mcp.json`** at **user scope** — the Cline CLI's clean config (`mcpServers`, transport inferred: stdio command/args/env, remote `url` + `headers`). Cline has no project MCP file, and its VS Code-extension MCP lives in OS/editor-specific globalStorage no config-sync tool writes, so project-scope MCP is reported as a skip. **Memory → `.clinerules/agentsync.md`** (plain markdown — Cline concatenates `.clinerules/`) and **commands → `.clinerules/workflows/<name>.md`** (plain markdown workflows invoked as `/<name>.md`; command frontmatter drops), both at **project scope** (Cline's global rules and workflows live in `~/Documents/Cline/`, a non-XDG app path agentsync deliberately does not target). **Skills, subagents, hooks, and LSP** have no Cline concept and are skipped. No `PluginIngester`; it still *receives* plugin-projected components on `apply`. |
 | **Grok Build** | ✅ Dedicated adapter | User/project instructions, skills with bundled files, legacy Markdown commands, TOML MCP, and JSON command hooks. Import captures the managed hook file only; unsupported handler fields are refused. See [Grok support](grok.md) for paths, trust requirements, verified upstream contracts, and limitations. |
-| **Breadth tier (22 agents)** | ✅ Generic adapter (memory + MCP + skills; Factory hooks) | A long tail of agents supported by one data-driven [generic adapter](#breadth-tier) — **memory** (rules file) for all, **MCP** where the agent reads a JSON server-map agentsync can express (15 of 22), and **Agent Skills** where the agent natively scans a `SKILL.md` directory (18 of 22). **Factory** is the one row with command hooks. Each is a *verified* spec, not a hand-written package; see the [Breadth tier](#breadth-tier) table for per-agent coverage. They flow through the normal apply/import pipeline (drift, secrets, capture), unlike a one-way rules dump. |
+| **Breadth tier (22 agents)** | ✅ Generic adapter (memory + MCP + skills; Factory/Copilot extensions) | A long tail of agents supported by one data-driven [generic adapter](#breadth-tier): **memory** for all, **MCP** where a JSON server-map is supported (15 of 22), and **Agent Skills** where a `SKILL.md` directory is scanned (18 of 22). Factory supports command hooks; Copilot adds agents, conditional instructions, manual command skills, and opt-in native hooks. They use the normal drift/secrets/capture pipeline, with per-component limits documented below. |
 
 ## Plugin import/apply: the shared invariant
 
@@ -104,7 +104,10 @@ adapter** (`internal/adapter/generic`): each agent is a *verified Spec* — a ro
 a table — rather than a hand-written package. The generic tier deliberately
 projects **memory** (the agent's rules/instructions file), **MCP** where the agent
 reads a JSON server-map agentsync can express, and **Agent Skills** where the agent
-natively scans a `SKILL.md` directory; every other component is reported as a skip.
+natively scans a `SKILL.md` directory. Factory additionally supports command
+hooks. Copilot additionally projects native agents, conditional instructions,
+manual command skills, and explicitly enabled native command hooks; other
+unsupported components are reported as skips.
 Breadth agents run through the same apply/import pipeline as the deep ones, so they
 get drift detection, secret resolution, and capture — not a one-way rules dump.
 
@@ -193,7 +196,7 @@ guessed.
 | **firebase** | `.idx/airules.md` | ✓ `.idx/mcp.json` (project) | ✗ publishes skills for other agents |
 | **antigravity** | `AGENTS.md` | ✓ `~/.gemini/config/mcp_config.json` (remote key `serverUrl`; the shared IDE+CLI path is codelab-sourced — older installs read `~/.gemini/antigravity-cli/mcp_config.json`, where this write is a no-op; re-verify when Antigravity's docs firm up. Lives inside `~/.gemini/`, the deep Gemini adapter's directory, but a different file — no collision) | ✓ `.agents/skills/` (project; global path disputed, omitted) |
 | **augmentcode** | `.augment/rules/` (+ user) | ✗ IDE app-storage | ✓ `.agents/skills/` (+ user) |
-| **copilot** | `.github/copilot-instructions.md` | ✓ `.vscode/mcp.json` (`servers` key, `type`) | ✓ `.github/skills/` · `~/.copilot/skills/` |
+| **copilot** | `.github/copilot-instructions.md` · `~/.copilot/copilot-instructions.md` | ✓ project `.vscode/mcp.json` (`servers`, `stdio`); user `~/.copilot/mcp-config.json` (`mcpServers`, `local`) | ✓ `.github/skills/` · `~/.copilot/skills/` |
 | **copilot-cli** | `AGENTS.md` | ✓ `~/.copilot/mcp-config.json` (`type`, stdio="local") | ✓ `.agents/skills/` (+ user) |
 | **crush** | `AGENTS.md` | ✓ crush.json `mcp` key (+ user) | ✓ `.agents/skills/` · `~/.config/crush/skills/` |
 | **factory** | `AGENTS.md` · `~/.factory/AGENTS.md` | ✓ `.factory/mcp.json` · `~/.factory/mcp.json` (`type`) | ✓ `.agents/skills/` (+ user) |
@@ -710,3 +713,117 @@ See the [user guide](user-guide.md) to put this into practice.
     config file. The Cursor adapter therefore ships **without** a `PluginIngester`
     (plugin discovery on `import` is deferred until that location is documented);
     it still fans out plugin *components* on `apply` like every other adapter.
+
+
+## VS Code Local harness profile instructions
+
+The opt-in `vscode-local` adapter targets a selected VS Code profile. `copilot`
+targets the Copilot harness home and shared project conventions. Neither target
+configures BYOK, model providers, inline completions, or editor settings.
+
+For the default Windows profile, configure:
+
+```toml
+[agents.vscode-local]
+enabled = true
+
+[vscode_local]
+prompts_home = '${env:APPDATA}/Code/User/prompts'
+```
+
+`${env:VAR}`, `${VAR}`, and `$VAR` expand from the process environment without
+rewriting the expression in canonical config. Unset/empty variables and paths
+that are not absolute after expansion are errors. `%VAR%` and `~` are not expanded.
+For other installations use the editor's actual `currentProfile.promptsHome`,
+including named profiles, portable installs, or custom user-data-dir. No profile
+enumeration or product-name fallback is performed. Project-only Local rendering
+does not require a user profile path.
+
+User MCP defaults to `mcp.json` beside the selected prompts directory. Set
+`[vscode_local].mcp_file` to an explicit absolute or environment-based file path
+when the profile has a different MCP location, especially when a named profile
+inherits default prompts. `AGENTSYNC_TARGET_ROOT` redirects all these outputs
+under the sandbox, including explicit MCP overrides. No profile Git repository
+is initialized. Existing sibling files are preserved; Local refuses unmanaged
+same-name Markdown collisions.
+
+| Component | Local user target | Copilot user target | Project target |
+| --- | --- | --- | --- |
+| Global memory | `<prompts_home>/agentsync.instructions.md`, `applyTo: "**"` | `~/.copilot/copilot-instructions.md` | Local `.github/instructions/agentsync.instructions.md`; Copilot `.github/copilot-instructions.md` |
+| Conditional instructions | `<prompts_home>/<name>.instructions.md` | `~/.copilot/instructions/<name>.instructions.md` | `.github/instructions/<name>.instructions.md` |
+| Subagents | `<prompts_home>/<name>.agent.md` | `~/.copilot/agents/<name>.agent.md` | `.github/agents/<name>.agent.md` |
+| Commands | `<prompts_home>/<name>.prompt.md` | `~/.copilot/skills/<name>/SKILL.md`, manual invocation only | Local `.github/prompts/<name>.prompt.md`; Copilot `.github/skills/<name>/SKILL.md` |
+| Skills, including bundled files | `~/.copilot/skills/<name>/` | Same | `.github/skills/<name>/` |
+| MCP | Profile `mcp.json`, `servers`, stdio `type: "stdio"` | `~/.copilot/mcp-config.json`, `mcpServers`, stdio `type: "local"` | `.vscode/mcp.json`, `servers`, stdio `type: "stdio"` |
+| Command hooks | Not translated | Opt-in `~/.copilot/hooks/agentsync.json` | Copilot opt-in `.github/hooks/agentsync.json` |
+
+Conditional instructions come from `memory/fragments/**/*.instructions.md`.
+They require native `applyTo` or `description` frontmatter; supported fields are
+`name`, `description`, and `applyTo`. Other fragments remain ordinary reusable
+memory. Do not `@import` a conditional file into global memory unless it should
+also be unconditional. The generated global filename is reserved. Removing or
+renaming a conditional fragment retires its tracked native file on the next
+apply, backing up native edits first and preserving files held by another
+agent. Global memory and ordinary fragments are not reclaimed.
+
+Agent metadata is validated per harness. `target: vscode` and
+`target: github-copilot` select the matching harness. Unsupported fields cause
+the whole component to be skipped with a reason, rather than dropping tool
+restrictions. Common Claude tool aliases are normalized; `agent/runSubagent`
+uses the shared `agent` alias in both Local and Copilot so a project agent
+renders identical bytes for both harnesses. Model values are
+native harness identifiers, not translated model aliases. Copilot agents require
+a nonempty description. Local commands retain native prompt metadata; Copilot
+commands accept only `description` and `argument-hint`, become user-invocable
+skills with `disable-model-invocation: true`, and are skipped if a skill already
+owns that name. They do not preserve a prompt's agent/model/tool execution mode.
+
+Copilot hooks are disabled by default. Set `[copilot] hooks_enabled = true` only
+after reviewing the script's native input/output protocol. Supported events are
+`sessionStart`, `sessionEnd`, `userPromptSubmitted`, `preToolUse`, `postToolUse`,
+`preCompact`, `subagentStart`, `subagentStop`, and `agentStop`. Only command
+handlers without matchers are projected; `timeout` becomes `timeoutSec`.
+PascalCase events and Claude/Local payloads are not automatically migrated.
+Hook locations may be discovered by multiple harnesses: the opt-in does not
+isolate a script from Local discovery. Review that deployment before enabling it.
+
+Local whole-agent import remains unsupported. Reconcile refuses direct
+write-back of Local global/conditional instructions, agents, and prompts, and
+of Copilot conditional instructions, agents, and command skills. These are
+transformed Markdown, not verbatim canonical files: copying their generated
+frontmatter, banners, or invocation metadata back would corrupt the source.
+For Local Markdown and conditional instructions, edit canonical resources and
+apply. For Copilot agents/commands, use `import copilot:subagent:<name>` or
+`import copilot:command:<name>` to capture through the adapter's inverse instead.
+Exact skill files and MCP-server key write-back retain their existing paths.
+Copilot imports `.agent.md`, conditional instructions, and managed command skills, but
+refuses modified command invocation metadata or added bundled files that cannot
+be represented as a command. Conditional memory import follows the existing
+global-memory marker safeguards; without global memory or reversible source
+markers, edit canonical fragments and apply. Explicit Copilot hook selectors
+(`import copilot:hook` and `import copilot:hook:<event>`) are refused, including
+with `--dry-run`. Whole-agent and unrelated component imports remain available
+when the managed hook file exists: they warn and skip hooks without reading the
+hook payload or changing native/canonical hook files or hook ownership.
+Hook write-back remains unsupported. LSP projection,
+custom `COPILOT_HOME`, experimental project `.mcp.json`, and automatic Hook
+protocol conversion are not implemented.
+
+Regression coverage includes `TestCopilotHarnessResources`,
+`TestCopilotHarnessRoundTrip`, `TestCopilotHooksRequireReviewAndNativeEvents`,
+`TestLocalHarnessResources`, `TestSharedProjectAgentIsIdentical`,
+`TestProfileMCPOverride`, `TestLoadVSCodeEnvironmentPath`,
+`TestReconcileVSCodeTransformedMarkdownRefusesWriteBack`,
+`TestVSCodeConditionalInstructionsLifecycle`,
+`TestVSCodeConditionalInstructionsKeepUnselectedOwner`,
+`TestVSCodeSharedProjectDelegationAgent`, and
+`TestImportCopilotHooksDoNotBlockOtherComponents`.
+Verify discovery in Agent Customizations and References; files being present
+does not establish model adherence. Local instruction discovery also requires
+`chat.includeApplyingInstructions` (default true).
+
+Sources: [instructions](https://code.visualstudio.com/docs/agent-customization/custom-instructions),
+[agents](https://code.visualstudio.com/docs/agent-customization/custom-agents),
+[prompts](https://code.visualstudio.com/docs/agent-customization/prompt-files),
+[MCP](https://code.visualstudio.com/docs/agent-customization/mcp-servers),
+and [hooks](https://code.visualstudio.com/docs/agent-customization/hooks).

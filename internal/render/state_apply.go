@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -245,6 +246,10 @@ func OrphanIsReclaimable(sourceID string) bool { return isOrphanReclaimable(sour
 // delete synthesis here and the writer's backup/prune behavior, so the two can
 // never disagree about what counts as an orphan.
 func isOrphanReclaimable(sourceID string) bool {
+	sourceID = filepath.ToSlash(sourceID)
+	if strings.HasPrefix(sourceID, "memory/fragments/") && strings.HasSuffix(sourceID, ".instructions.md") {
+		return true
+	}
 	for _, p := range orphanReclaimedPrefixes {
 		if strings.HasPrefix(sourceID, p) {
 			return true
@@ -352,10 +357,10 @@ func (d SharedDests) FilterDeletes(dels []adapter.FileOp) []adapter.FileOp {
 }
 
 // orphanDeletes returns delete FileOps for files this agent owns in state —
-// entries whose SourceID is under one of orphanReclaimedPrefixes — that the
-// current plan no longer renders. It is how `apply` converges a destination when
-// a component (a whole skill, a single bundled file within one, a subagent, a
-// command) is removed from or renamed in the canonical source: the leftover dest
+// entries accepted by isOrphanReclaimable — that the current plan no longer
+// renders. It is how `apply` converges a destination when a component (a whole
+// skill, a bundled file, a subagent, a command, or a conditional instruction)
+// is removed from or renamed in the canonical source: the leftover dest
 // file is removed instead of lingering forever.
 //
 // Each op carries the state SourceID + Mode so the writer can back up a drifted

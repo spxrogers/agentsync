@@ -10,8 +10,8 @@
 // component support (subagents, commands, hooks, …) and bidirectional nuances
 // that don't fit a table. The generic tier covers memory, MCP, and Agent Skills
 // (the open SKILL.md spec, where the agent natively scans a skills directory),
-// and reports every other component as a skip, so its coverage is never
-// overstated. Factory Droid is the one exception: its spec declares a hooks.json,
+// and reports unsupported components as skips. Copilot also uses the native
+// Markdown and hook projections in vscode.go. Factory's spec declares hooks.json,
 // and Register wraps that adapter so only it implements HookIngestGuard. The
 // hook dialect (root event map, Droid's event list, settings.json fallback) is
 // Factory's. Setting Hooks on another spec would inherit that dialect, which is
@@ -214,6 +214,15 @@ func (a *Adapter) mcpPath(scope adapter.Scope, project string) string {
 		return ""
 	}
 	return filepath.Join(a.opts.TargetRoot, a.spec.MCP.User)
+}
+
+func (a *Adapter) mcpDialect(scope adapter.Scope) MCPTarget {
+	dialect := a.spec.MCP
+	if a.spec.Name == "copilot" && scope == adapter.ScopeUser {
+		dialect.RootKey = "mcpServers"
+		dialect.StdioValue = "local"
+	}
+	return dialect
 }
 
 // skillsPath resolves the absolute Agent-Skills root directory for the given

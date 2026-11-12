@@ -12,6 +12,31 @@ import (
 	"github.com/spxrogers/agentsync/internal/untrusted"
 )
 
+func TestLoadVSCodeEnvironmentPath(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("AGENTSYNC_TEST_PROFILE", home)
+	fs := afero.NewMemMapFs()
+	config := "[agents.vscode-local]\nenabled = true\n[vscode_local]\nprompts_home = '${env:AGENTSYNC_TEST_PROFILE}/prompts'\n[copilot]\nhooks_enabled = true\n"
+	if err := afero.WriteFile(fs, filepath.Join(home, "agentsync.toml"), []byte(config), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	canonical, err := source.Load(fs, home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if canonical.Config.VSCodeLocal.PromptsHome != "${env:AGENTSYNC_TEST_PROFILE}/prompts" || !canonical.Config.Copilot.HooksEnabled {
+		t.Fatal("config expansion mutated the source or lost hook opt-in")
+	}
+	resolved, err := canonical.Config.VSCodeLocal.ResolvePromptsHome()
+	if err != nil || resolved != filepath.Join(home, "prompts") {
+		t.Fatalf("resolved path: %q, %v", resolved, err)
+	}
+	t.Setenv("AGENTSYNC_TEST_PROFILE", "")
+	if _, err := source.Load(fs, home); err == nil {
+		t.Fatal("accepted unresolved environment path")
+	}
+}
+
 // TestLoad_AgentsyncTOMLRejectsTypos guards against the silent-drop bug
 // where misspelled top-level keys in agentsync.toml were ignored and the
 // default applied. Strict mode catches typos at load time.
