@@ -1,0 +1,85 @@
+# .reviewlooprc — what this repo adds to /review-loop
+
+The `/review-loop` skill names no repository. Its canonical copy here is
+`.agentsync/skills/review-loop/`, rendered to `.claude/skills/` and `.agents/skills/` by
+`agentsync apply --scope project`. It reads this file, when it exists at the repo root, and
+applies each section at the step the skill's Step 0 names. This file adds the repo's conventions;
+it cannot loosen a rule of the skill.
+
+## Read first
+
+- Every lens reads `CLAUDE.md`: its three *non-negotiable* sections, *Secret-handling
+  invariants*, and *Adding things*.
+- A diff that touches an adapter, the render or capture pipelines, or the drift classifier:
+  `docs/architecture.md` and `docs/components.md`.
+- A diff that touches the canonical schema or the `~/.agentsync/` layout: `docs/concepts.md`.
+- A diff that changes what an agent supports: `docs/capability-matrix.md`.
+
+## Checks and shared services
+
+- Tests: `just test-fast`. A test that touches the filesystem refuses to run on the host without
+  `AGENTSYNC_TEST_IN_CONTAINER=1`; `CLAUDE.md` → *Build / test / lint* has the rest.
+- **`just lint` rewrites files** (`gofmt`, gofumpt, `go mod tidy`). A reviewer is read-only, so a
+  reviewer runs it only in a throwaway clone outside the worktree, never in place. In a cloud
+  container the linter needs the toolchain forced; `CLAUDE.md` says how.
+- A reviewer must not touch the real `~/.agentsync/`, any agent's real config under the home
+  directory, or the vault. Never run `agentsync apply`, `import` or `reconcile` at user scope.
+
+## Lens angles
+
+### Correctness
+
+- The drift classifier's nine cases, and state recorded after a partial apply.
+- A round trip (render, then capture) of each component the change touches.
+
+### Adversarial
+
+- A resolved secret reaching the canonical source by any path, and anything that unwraps a
+  `secrets.Resolved` outside an adapter's `Render`.
+- Hostile native config read by `import` or `reconcile`: ids used as paths, unmodeled keys,
+  oversized or malformed files.
+- Typed-nil pointers, and nilable kinds beyond pointers (map, chan, func, slice, interface).
+- Defer ordering, a panic while a deferred call's arguments are evaluated, and `Goexit`
+  unwinding through pending I/O.
+- Goroutine lifecycle: leaks, a blocked send or receive, cleanup ordering.
+- Process-global state (`os.Stderr` swaps, log defaults, environment variables) and one test
+  polluting another.
+- ANSI and control bytes, or embedded newlines, in a string from native config that flows
+  through styling or logging.
+
+### API design
+
+- The `Adapter` interface and `DestWriter`: `Render` takes `secrets.Resolved`, and every write
+  goes through `DestWriter`.
+- An interface is named for what its implementor does (the `PluginIngester` precedent).
+- A restore handle against a symmetric setup and teardown pair.
+- `any` against a nominal interface parameter: type safety against breaking an import cycle.
+- A structural interface duplicated across packages against one neutral shared package.
+- The CLI surface: every command declares a scope stance, and a group parent is a `strictGroup`.
+
+### Test rigor
+
+- A fidelity test starts from a spec-complete fixture on disk and asserts the result on disk,
+  never the parsed model (`CLAUDE.md` → *Models must stay faithful*).
+- Anything that needs `-race`.
+- A test whose result depends on an agent binary being absent sets its own `PATH`.
+- Stdlib testing only, table-driven; filesystem through `afero.NewMemMapFs()` or `t.TempDir()`.
+
+## Fixing
+
+- Docs change in the same commit as the behaviour: the table in `CLAUDE.md` → *Keep the docs in
+  sync* says which, `CHANGELOG.md` included.
+- Agent config is changed under `.agentsync/` and re-rendered, never in a rendered file.
+- A new claim about what a harness supports is checked against its upstream docs first.
+- After `just lint`, re-stage what it rewrote before committing.
+- Commits are conventional commits with a scope.
+
+## Gated areas
+
+- **Stated principles** — the sections of `CLAUDE.md` marked *non-negotiable*: docs in sync,
+  models faithful to their on-disk artifacts, upstream docs before guessing.
+- **Private data and secrets** — the secret-handling invariants: `walkSecretFields`, the
+  `capture.Capture` funnel and its backstop, the `secrets.Resolved` type, the lint fence.
+- **Stored data and published contracts** — the canonical schema (`internal/source/schema.go`),
+  the `~/.agentsync/` layout, the state file, the CLI surface, and the `Adapter` interface.
+- **Money** — nothing in this repo.
