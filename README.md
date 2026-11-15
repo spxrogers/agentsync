@@ -149,12 +149,14 @@ channels by a few hours.
 
 ### Any platform — npm / Bun
 
-Run it without installing, or install it globally. The npm package is
-`@spxrogers/agentsync` (scoped, because the unscoped `agentsync` on npm belongs
-to an unrelated project); the command it installs is `agentsync`:
+Install it globally, then run the `agentsync` command it installs. The npm
+package is `@spxrogers/agentsync` (scoped, because the unscoped `agentsync` on
+npm belongs to an unrelated project):
 
-    npx @spxrogers/agentsync --version    # or: bunx @spxrogers/agentsync --version
     npm install -g @spxrogers/agentsync   # or: bun add -g @spxrogers/agentsync
+    agentsync --version
+
+To try it without installing: `npx @spxrogers/agentsync --version` (or `bunx`).
 
 The package is a small Node launcher plus a prebuilt binary for your platform
 (linux / darwin / win32 × x64 / arm64), pulled in as an optional dependency, with

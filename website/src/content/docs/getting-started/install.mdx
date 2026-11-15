@@ -86,28 +86,31 @@ import { Tabs, TabItem, Aside, Steps } from '@astrojs/starlight/components';
 
 ## npm / Bun (any OS)
 
-Already have Node or Bun? Run agentsync without installing it, or install it
-globally. The npm package is **`@spxrogers/agentsync`** (scoped, because the
-unscoped `agentsync` on npm is an unrelated project); the command it installs is
-`agentsync`.
+Already have Node or Bun? Install agentsync globally, then run the `agentsync`
+command it installs. The npm package is **`@spxrogers/agentsync`** (scoped,
+because the unscoped `agentsync` on npm is an unrelated project). To try it
+first, run it once without installing (`npx` / `bunx` / `pnpm dlx`).
 
 <Tabs syncKey="js-pm">
 	<TabItem label="npm">
 		```bash
-		npx @spxrogers/agentsync --version    # run without installing
 		npm install -g @spxrogers/agentsync   # install the `agentsync` command
+		agentsync --version
+		npx @spxrogers/agentsync --version    # or: try it without installing
 		```
 	</TabItem>
 	<TabItem label="Bun">
 		```bash
-		bunx @spxrogers/agentsync --version   # run without installing
 		bun add -g @spxrogers/agentsync       # install the `agentsync` command
+		agentsync --version
+		bunx @spxrogers/agentsync --version   # or: try it without installing
 		```
 	</TabItem>
 	<TabItem label="pnpm">
 		```bash
-		pnpm dlx @spxrogers/agentsync --version
-		pnpm add -g @spxrogers/agentsync
+		pnpm add -g @spxrogers/agentsync      # install the `agentsync` command
+		agentsync --version
+		pnpm dlx @spxrogers/agentsync --version   # or: try it without installing
 		```
 	</TabItem>
 </Tabs>

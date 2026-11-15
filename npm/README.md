@@ -8,14 +8,6 @@ Build, plus a breadth tier of 20+ more.
 
 **Docs:** [agentsync.cc](https://agentsync.cc) · **Source:** [github.com/spxrogers/agentsync](https://github.com/spxrogers/agentsync)
 
-## Run it without installing
-
-```bash
-npx @spxrogers/agentsync --version
-bunx @spxrogers/agentsync doctor
-npx @spxrogers/agentsync@latest apply
-```
-
 ## Install
 
 ```bash
@@ -26,6 +18,13 @@ agentsync --version
 The npm package is `@spxrogers/agentsync` (scoped, because the unscoped
 `agentsync` on npm is an unrelated project); the command it installs is
 `agentsync`.
+
+## Try it without installing
+
+```bash
+npx @spxrogers/agentsync --version
+bunx @spxrogers/agentsync doctor
+```
 
 ## How it works
 

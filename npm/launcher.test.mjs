@@ -1,5 +1,5 @@
 // Tests for the npm launcher (npm/bin/agentsync.js): run it the way npm does —
-// from node_modules/agentsync.cc/bin — against a fake platform package whose
+// from node_modules/@spxrogers/agentsync/bin — against a fake platform package whose
 // "binary" is a shell script, and check argv/stdio/exit-status/signal fidelity.
 //
 //   node --test npm/*.test.mjs
