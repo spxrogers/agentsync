@@ -1,10 +1,10 @@
 name: npm-publish
-# Publish a GitHub Release's binaries to npm as `agentsync.cc`, so
-# `npx agentsync.cc` / `bunx agentsync.cc` / `npm i -g agentsync.cc` work. The
-# packaging lives in npm/ (npm/build.mjs, the launcher in npm/bin/): one small
-# launcher package plus one `@spxrogers/agentsync.cc-<platform>-<arch>` package
-# per binary (in the maintainer's own npm scope, so nobody else can publish
-# under those names).
+# Publish a GitHub Release's binaries to npm as `@spxrogers/agentsync`, so
+# `npx @spxrogers/agentsync` / `bunx @spxrogers/agentsync` /
+# `npm i -g @spxrogers/agentsync` work. The packaging lives in npm/
+# (npm/build.mjs, the launcher in npm/bin/): one small launcher package plus one
+# `@spxrogers/agentsync-<platform>-<arch>` package per binary, all in the
+# maintainer's own npm scope, so nobody else can publish under those names.
 #
 # Two ways in, both landing in the single `npm` job below:
 #   1. called by the `release` workflow (`workflow_call`) once GoReleaser has
@@ -27,7 +27,7 @@ name: npm-publish
 # a platform package whose bytes we didn't build. Building from the tag with the
 # tag's pinned Node is what keeps a re-run byte-identical. A stable version older than the
 # current `latest` is published under the `backfill` dist-tag, so backfilling
-# never downgrades `npx agentsync.cc`.
+# never downgrades `npx @spxrogers/agentsync`.
 #
 # Auth — gated like Chocolatey: with no credential the job still builds and
 # dry-runs the packages (so the path is proven every release), then stops.
@@ -74,7 +74,7 @@ concurrency:
 
 jobs:
   npm:
-    name: npm-publish (agentsync.cc)
+    name: npm-publish (@spxrogers/agentsync)
     runs-on: ubuntu-latest
     steps:
       # The tag arrives via env and is validated before anything uses it (the

@@ -91,11 +91,11 @@ scoop install agentsync
 choco install agentsync
 ```
 
-**Any platform — npm / Bun** (the package is `agentsync.cc`; the command is `agentsync`)
+**Any platform — npm / Bun** (the package is `@spxrogers/agentsync`; the command is `agentsync`)
 
 ```bash
-npx agentsync.cc --version     # run without installing (or: bunx agentsync.cc)
-npm install -g agentsync.cc    # or: bun add -g agentsync.cc
+npx @spxrogers/agentsync --version    # run without installing (or: bunx @spxrogers/agentsync)
+npm install -g @spxrogers/agentsync   # or: bun add -g @spxrogers/agentsync
 ```
 
 **Linux** — `.deb`/`.rpm` on the [Releases page](https://github.com/spxrogers/agentsync/releases).

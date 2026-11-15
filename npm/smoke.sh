@@ -20,7 +20,7 @@ set -euo pipefail
 out="${1:?usage: npm/smoke.sh <npm-out-dir>}"
 out="$(cd "$out" && pwd)"
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-main="agentsync.cc"
+main="@spxrogers/agentsync"
 version="$(node -p "require('$out/$main/package.json').version")"
 # The platform package this machine needs, resolved by the launcher's own logic.
 plat_pkg="$(node -p "require('$here/bin/agentsync.js').platformPackage(require('$out/$main/package.json'), process.platform, process.arch) || ''")"

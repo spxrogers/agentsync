@@ -45,14 +45,16 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   Plugin-provided hooks keep their timeout too; one agentsync cannot carry is
   dropped with a warning so a third-party manifest can't make itself
   unloadable.
-- **npm / Bun distribution: `npx agentsync.cc` and `bunx agentsync.cc`.** Every
-  release is published to npm as `agentsync.cc` (the command is still
-  `agentsync`; `agentsync` on npm is an unrelated project). The package is a
-  small Node launcher plus one prebuilt-binary package per platform
-  (`@spxrogers/agentsync.cc-<platform>-<arch>`, linux/darwin/win32 × x64/arm64;
-  scoped so nobody else can publish under those names), selected as an optional
-  dependency with no install script, so `bunx` and `--ignore-scripts` work. The
-  binaries are the GitHub Release's own, sha256-checked against its
+- **npm / Bun distribution: `npx @spxrogers/agentsync` and
+  `bunx @spxrogers/agentsync`.** Every release is published to npm as
+  `@spxrogers/agentsync` (the command is still `agentsync`; the package is
+  scoped because the unscoped `agentsync` on npm is an unrelated project, and
+  npm rejects close variants as too similar). The package is a small Node
+  launcher plus one prebuilt-binary package per platform
+  (`@spxrogers/agentsync-<platform>-<arch>`, linux/darwin/win32 × x64/arm64),
+  all in one scope so nobody else can publish under those names, selected as an
+  optional dependency with no install script, so `bunx` and `--ignore-scripts`
+  work. The binaries are the GitHub Release's own, sha256-checked against its
   `checksums.txt`, and published with npm provenance. The launcher passes argv,
   stdio, and the exit status through unchanged, forwards signals, and names the
   missing platform package when optional dependencies were omitted. Re-running a

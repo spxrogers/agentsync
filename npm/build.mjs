@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Build (and optionally publish) the agentsync npm packages from a GoReleaser
-// release — the thing that makes `npx agentsync.cc` / `bunx agentsync.cc` work.
+// release — the thing that makes `npx @spxrogers/agentsync` / `bunx @spxrogers/agentsync` work.
 //
 //   node npm/build.mjs --dist <dir> [--out <dir>] [--expect-version X.Y.Z]
 //                      [--publish [--provenance] [--dry-run]]
@@ -13,11 +13,13 @@
 //
 // Layout (the esbuild/biome pattern — no postinstall, so bunx and
 // --ignore-scripts work):
-//   agentsync.cc                              launcher (npm/bin/agentsync.js)
-//                                             + optionalDependencies
-//   @spxrogers/agentsync.cc-<platform>-<arch> one prebuilt binary each, os/cpu-gated
-// The platform packages live in the maintainer's npm scope so nobody else can
-// publish under their names (squatting); users only ever type `agentsync.cc`.
+//   @spxrogers/agentsync                   launcher (npm/bin/agentsync.js)
+//                                          + optionalDependencies
+//   @spxrogers/agentsync-<platform>-<arch> one prebuilt binary each, os/cpu-gated
+// Every package lives in the maintainer's own npm scope, so nobody else can
+// publish under these names (squatting), and npm's name-similarity check (which
+// blocked several unscoped names) does not apply. The installed command is
+// `agentsync`.
 //
 // FROZEN CLI: .github/workflows/npm-publish.yml runs the tag's copy of this
 // script with the flags above, but its steps come from whichever ref the run was
@@ -39,10 +41,11 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 
-export const MAIN_PACKAGE = 'agentsync.cc';
-// npm scope of the platform packages: the publishing account's own scope, so the
-// names can't be registered by anyone else.
-export const PLATFORM_SCOPE = '@spxrogers';
+// npm scope of every package: the publishing account's own scope, so the names
+// can't be registered by anyone else. (Unscoped `agentsync` is an unrelated
+// project, and npm rejects close variants as "too similar".)
+export const NPM_SCOPE = '@spxrogers';
+export const MAIN_PACKAGE = `${NPM_SCOPE}/agentsync`;
 
 // Every GoReleaser target (.goreleaser.yaml builds: goos × goarch), mapped to
 // Node's process.platform / process.arch. A release missing any of these is
@@ -68,7 +71,7 @@ const SEMVER =
 	/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+([0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$/;
 
 export function platformPackageName(t) {
-	return `${PLATFORM_SCOPE}/${MAIN_PACKAGE}-${t.platform}-${t.arch}`;
+	return `${MAIN_PACKAGE}-${t.platform}-${t.arch}`;
 }
 
 export function archiveName(version, t) {
@@ -108,7 +111,7 @@ export function compareVersions(a, b) {
 // distTag picks the dist-tag every package of this version is published under,
 // given the launcher's current `latest` (null if it has none yet):
 //   - prereleases (v1.2.3-rc.1, snapshots) go to `next`, never `latest`, so a
-//     plain `npx agentsync.cc` doesn't pick one up;
+//     plain `npx @spxrogers/agentsync` doesn't pick one up;
 //   - a stable version OLDER than the current `latest` (a backfill, or a patch
 //     on an old line) goes to `backfill` — `npm publish --tag latest` would
 //     otherwise move `latest` backwards and downgrade every `npx` user;

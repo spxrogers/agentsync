@@ -11,24 +11,26 @@ Build, plus a breadth tier of 20+ more.
 ## Run it without installing
 
 ```bash
-npx agentsync.cc --version
-bunx agentsync.cc doctor
-npx agentsync.cc@latest apply
+npx @spxrogers/agentsync --version
+bunx @spxrogers/agentsync doctor
+npx @spxrogers/agentsync@latest apply
 ```
 
 ## Install
 
 ```bash
-npm install -g agentsync.cc   # or: bun add -g agentsync.cc / pnpm add -g agentsync.cc
+npm install -g @spxrogers/agentsync   # or: bun add -g / pnpm add -g @spxrogers/agentsync
 agentsync --version
 ```
 
-The npm package name is `agentsync.cc`; the command it installs is `agentsync`.
+The npm package is `@spxrogers/agentsync` (scoped, because the unscoped
+`agentsync` on npm is an unrelated project); the command it installs is
+`agentsync`.
 
 ## How it works
 
 agentsync is a single Go binary. This package is a small Node launcher; the
-binary itself comes from one platform package (`@spxrogers/agentsync.cc-<platform>-<arch>`,
+binary itself comes from one platform package (`@spxrogers/agentsync-<platform>-<arch>`,
 for linux, darwin, and win32 on x64 and arm64) that your package manager picks
 as an optional dependency. No install script runs. The binaries are the same
 ones attached to the matching

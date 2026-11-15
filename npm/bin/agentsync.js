@@ -1,9 +1,9 @@
 #!/usr/bin/env node
-// agentsync npm launcher — the `bin` of the `agentsync.cc` package.
+// agentsync npm launcher — the `bin` of the `@spxrogers/agentsync` package.
 //
 // agentsync is a Go binary; npm/bunx can't run it directly. The main package
 // carries only this launcher and lists one package per platform
-// (`@spxrogers/agentsync.cc-<platform>-<arch>`, each holding the prebuilt binary)
+// (`@spxrogers/agentsync-<platform>-<arch>`, each holding the prebuilt binary)
 // as optionalDependencies with `os`/`cpu` fields, so the package manager installs
 // exactly the one matching this machine. There is deliberately NO postinstall:
 // `bunx` (and `npm --ignore-scripts`) skip install scripts, and this layout needs
@@ -26,20 +26,15 @@ const INSTALL_DOCS = 'https://agentsync.cc/getting-started/install/';
 // Signals forwarded to the binary while it runs (see run()).
 const FORWARDED = ['SIGINT', 'SIGTERM', 'SIGHUP', 'SIGQUIT'];
 
-// platformSuffix is the unscoped tail of a platform package name:
-// `@spxrogers/agentsync.cc-linux-x64` → `agentsync.cc-linux-x64`.
-function platformSuffix(name) {
-	return name.slice(name.lastIndexOf('/') + 1);
-}
-
 // platformPackage returns the name of the platform package for this machine, or
 // null when the main package ships no binary for it. `optionalDependencies` is
 // the source of truth for what's supported: npm/build.mjs writes one entry per
-// published platform, named `[<scope>/]<main>-<platform>-<arch>` in Node's
-// vocabulary. Only names the launcher itself lists can ever be resolved.
+// published platform, named `<main>-<platform>-<arch>` in Node's vocabulary
+// (same scope as the launcher). Only names the launcher itself lists can ever be
+// resolved.
 function platformPackage(mainPkg, platform, arch) {
 	const want = `${mainPkg.name}-${platform}-${arch}`;
-	return Object.keys(mainPkg.optionalDependencies || {}).find((n) => platformSuffix(n) === want) || null;
+	return Object.prototype.hasOwnProperty.call(mainPkg.optionalDependencies || {}, want) ? want : null;
 }
 
 // resolvePlatform finds the installed platform package: its binary and its
@@ -63,7 +58,7 @@ function main() {
 	const pkgName = platformPackage(mainPkg, platform, arch);
 	if (!pkgName) {
 		const supported = Object.keys(mainPkg.optionalDependencies || {})
-			.map((n) => platformSuffix(n).slice(mainPkg.name.length + 1))
+			.map((n) => n.slice(mainPkg.name.length + 1))
 			.join(', ');
 		fail([
 			`no prebuilt binary for ${platform}-${arch} in ${mainPkg.name}@${mainPkg.version}.`,

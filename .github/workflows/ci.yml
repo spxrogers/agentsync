@@ -249,7 +249,7 @@ jobs:
           # validates the signs: block's schema. CI only proves the cross-build
           # stays viable — release.yml is the run that actually signs.
           args: release --snapshot --skip=publish,chocolatey,sign --clean
-      # npm distribution (`npx agentsync.cc` / `bunx agentsync.cc`, see npm/): run
+      # npm distribution (`npx @spxrogers/agentsync`, see npm/): run
       # the launcher + builder unit tests, then build the npm packages from THIS
       # snapshot's archives (checksum-verified, exactly as npm-publish.yml does
       # from a real Release) and install them from packed tarballs to prove npx

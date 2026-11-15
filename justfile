@@ -139,7 +139,7 @@ ci: lint test-release
     go run github.com/goreleaser/goreleaser/v2@v2.16.0 release --snapshot --skip=publish,sign --clean
     just npm-smoke
 
-# npm packaging (`npx agentsync.cc`): unit tests, then build the packages from the
+# npm packaging (`npx @spxrogers/agentsync`): unit tests, then build the packages from the
 # goreleaser snapshot in dist/ and install them through npx (+ bunx if present).
 # Needs a snapshot first (`just ci`, or the goreleaser line above).
 npm-smoke:

@@ -60,7 +60,7 @@ describe('targets', () => {
 
 	test('platform packages live in the maintainer scope', () => {
 		for (const t of TARGETS) {
-			assert.ok(platformPackageName(t).startsWith('@spxrogers/agentsync.cc-'), platformPackageName(t));
+			assert.ok(platformPackageName(t).startsWith('@spxrogers/agentsync-'), platformPackageName(t));
 		}
 	});
 });
@@ -228,7 +228,7 @@ describe('build', { skip: !haveTools && 'needs zip and tar' }, () => {
 			const { version, dirs } = built;
 			assert.equal(version, '2.0.0');
 			assert.equal(dirs.length, TARGETS.length + 1);
-			assert.equal(path.basename(dirs.at(-1)), MAIN_PACKAGE, 'launcher publishes last');
+			assert.equal(path.relative(out, dirs.at(-1)).split(path.sep).join('/'), MAIN_PACKAGE, 'launcher publishes last');
 			const license = fs.readFileSync(path.join(here, '..', 'LICENSE'));
 			for (const t of TARGETS) {
 				const pkgDir = path.join(out, platformPackageName(t));

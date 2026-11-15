@@ -162,15 +162,16 @@ remote (`git push origin :vX.Y.Z`), and re-cut it — or, if the tag is fine and
 only publishing failed, re-run GoReleaser against the existing tag
 (`goreleaser release --clean`).
 
-### npm (`npx agentsync.cc`)
+### npm (`npx @spxrogers/agentsync`)
 
 The release's `npm` job calls `.github/workflows/npm-publish.yml`, which
 downloads the new Release's archives and `checksums.txt`, and runs
 `npm/build.mjs`. That script verifies each archive and publishes seven packages:
-one `@spxrogers/agentsync.cc-<platform>-<arch>` package per binary, then the
-`agentsync.cc` launcher. The platform packages live in the maintainer's npm
-scope so nobody else can publish under their names; users only type
-`agentsync.cc`.
+one `@spxrogers/agentsync-<platform>-<arch>` package per binary, then the
+`@spxrogers/agentsync` launcher. Every package lives in the maintainer's npm
+scope, so nobody else can publish under these names and npm's name-similarity
+check doesn't apply; users only type `@spxrogers/agentsync`, and the command
+is `agentsync`.
 
 A name@version already on the registry is skipped if its tarball is identical to
 ours, so **re-running the failed job**, or dispatching **npm-publish** with the
@@ -184,7 +185,7 @@ and the error names who published it. If that isn't you, stop and investigate.
 If it is, something changed between attempts (the default branch's tooling for a
 backfill, or the pinned Node version). If a re-run can't fix it, cut a patch
 release. A stable version older than the current `latest` goes to the
-`backfill` dist-tag, so backfilling never downgrades `npx agentsync.cc`.
+`backfill` dist-tag, so backfilling never downgrades `npx @spxrogers/agentsync`.
 
 Because a release is packaged with *its own* `npm/` tooling and Node pin
 (`npm/.node-version`), a fix to the launcher or the build script reaches npm only
@@ -213,9 +214,7 @@ job builds and dry-runs the packages, then stops. To go live:
    authentication** checked, since CI can't enter a one-time password.
    Save it as the `NPM_TOKEN` repository secret, then run **npm-publish** with
    the latest tag to create all seven packages (a tag cut before `npm/` existed
-   uses the default branch's tooling automatically). Nobody else can register the
-   scoped platform names, but `agentsync.cc` itself is unscoped, so publish it
-   promptly.
+   uses the default branch's tooling automatically).
 2. **Switch to trusted publishing (no stored secret).** On npmjs.com, add a
    GitHub Actions trusted publisher to each of the seven packages, for this
    repository with workflow `release.yml` **and** again with workflow

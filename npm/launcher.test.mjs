@@ -17,7 +17,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const launcherSrc = path.join(here, 'bin', 'agentsync.js');
 const { platformPackage } = require(launcherSrc);
 
-const MAIN = 'agentsync.cc';
+const MAIN = '@spxrogers/agentsync';
 const VERSION = '1.2.3';
 const posix = process.platform !== 'win32';
 
@@ -44,8 +44,8 @@ function installFixture(root, { withPlatform, supported = true, platformVersion 
 	const mainDir = path.join(root, 'node_modules', MAIN);
 	fs.mkdirSync(path.join(mainDir, 'bin'), { recursive: true });
 	fs.copyFileSync(launcherSrc, path.join(mainDir, 'bin', 'agentsync.js'));
-	const plat = `@spxrogers/${MAIN}-${process.platform}-${process.arch}`;
-	const listed = supported ? plat : `@spxrogers/${MAIN}-plan9-mips`;
+	const plat = `${MAIN}-${process.platform}-${process.arch}`;
+	const listed = supported ? plat : `${MAIN}-plan9-mips`;
 	fs.writeFileSync(
 		path.join(mainDir, 'package.json'),
 		JSON.stringify({ name: MAIN, version: VERSION, optionalDependencies: { [listed]: VERSION } }),
@@ -60,21 +60,19 @@ function installFixture(root, { withPlatform, supported = true, platformVersion 
 }
 
 describe('platformPackage', () => {
-	const main = {
-		name: MAIN,
-		optionalDependencies: { [`@spxrogers/${MAIN}-linux-x64`]: VERSION, [`${MAIN}-darwin-arm64`]: VERSION },
-	};
-	test('names a published platform, scoped or not', () => {
-		assert.equal(platformPackage(main, 'linux', 'x64'), `@spxrogers/${MAIN}-linux-x64`);
+	const main = { name: MAIN, optionalDependencies: { [`${MAIN}-linux-x64`]: VERSION, [`${MAIN}-darwin-arm64`]: VERSION } };
+	test('names a published platform', () => {
+		assert.equal(platformPackage(main, 'linux', 'x64'), `${MAIN}-linux-x64`);
 		assert.equal(platformPackage(main, 'darwin', 'arm64'), `${MAIN}-darwin-arm64`);
-	});
-	test('never matches another package name that merely ends the same way', () => {
-		const other = { name: MAIN, optionalDependencies: { [`not-${MAIN}-linux-x64`]: VERSION } };
-		assert.equal(platformPackage(other, 'linux', 'x64'), null);
 	});
 	test('returns null for an unpublished platform', () => {
 		assert.equal(platformPackage(main, 'linux', 'riscv64'), null);
 		assert.equal(platformPackage(main, 'aix', 'ppc64'), null);
+	});
+	test('matches only its own exact name, never a lookalike or another scope', () => {
+		for (const other of [`@evil/agentsync-linux-x64`, `agentsync-linux-x64`, `${MAIN}-linux-x64-extra`]) {
+			assert.equal(platformPackage({ name: MAIN, optionalDependencies: { [other]: VERSION } }, 'linux', 'x64'), null, other);
+		}
 	});
 });
 
@@ -220,7 +218,7 @@ cp.spawn = function (...args) {
 
 	test('a signal during the exec-bit retry reaches the retried binary', () => {
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentsync-preload-'));
-		const bin = path.join(root, 'node_modules', '@spxrogers', `${MAIN}-${process.platform}-${process.arch}`, 'bin', 'agentsync');
+		const bin = path.join(root, 'node_modules', `${MAIN}-${process.platform}-${process.arch}`, 'bin', 'agentsync');
 		try {
 			fs.chmodSync(bin, 0o644); // first spawn fails with EACCES; the signal lands then
 			const r = spawnSync(process.execPath, ['--require', preload(dir), launcher, 'sleep'], {
@@ -238,7 +236,7 @@ cp.spawn = function (...args) {
 	});
 
 	test('restores a lost exec bit once', () => {
-		const bin = path.join(root, 'node_modules', '@spxrogers', `${MAIN}-${process.platform}-${process.arch}`, 'bin', 'agentsync');
+		const bin = path.join(root, 'node_modules', `${MAIN}-${process.platform}-${process.arch}`, 'bin', 'agentsync');
 		fs.chmodSync(bin, 0o644);
 		const r = run(['echo', 'ok']);
 		assert.equal(r.status, 0, r.stderr);
@@ -252,7 +250,7 @@ cp.spawn = function (...args) {
 		const other = fs.mkdtempSync(path.join(os.tmpdir(), 'agentsync-launcher-'));
 		try {
 			const l = installFixture(other, { withPlatform: true });
-			const bin = path.join(other, 'node_modules', '@spxrogers', `${MAIN}-${process.platform}-${process.arch}`, 'bin', 'agentsync');
+			const bin = path.join(other, 'node_modules', `${MAIN}-${process.platform}-${process.arch}`, 'bin', 'agentsync');
 			fs.rmSync(bin);
 			fs.mkdirSync(bin);
 			const r = spawnSync(process.execPath, [l, 'echo', 'x'], { encoding: 'utf8', timeout: 10000, killSignal: 'SIGKILL' });
@@ -286,7 +284,7 @@ describe('launcher refusing to run', () => {
 			const r = spawnSync(process.execPath, [launcher, 'echo', 'ran'], { encoding: 'utf8', timeout: 20000 });
 			assert.equal(r.status, 1);
 			assert.equal(r.stdout, '', 'the mismatched binary must not run');
-			assert.match(r.stderr, new RegExp(`found @spxrogers/${MAIN}-${process.platform}-${process.arch}@9\\.9\\.9, but the launcher is ${MAIN}@${VERSION.replaceAll('.', '\\.')}`));
+			assert.match(r.stderr, new RegExp(`found ${MAIN}-${process.platform}-${process.arch}@9\\.9\\.9, but the launcher is ${MAIN}@${VERSION.replaceAll('.', '\\.')}`));
 		} finally {
 			fs.rmSync(root, { recursive: true, force: true });
 		}

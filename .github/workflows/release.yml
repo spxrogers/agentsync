@@ -8,7 +8,7 @@ name: release
 # workflow can be run manually to redeploy the docs out of band.
 # Likewise the `npm` job calls the reusable `npm-publish` workflow
 # (.github/workflows/npm-publish.yml) to publish the Release's binaries to npm as
-# `agentsync.cc`, so `npx agentsync.cc` / `bunx agentsync.cc` track it too.
+# `@spxrogers/agentsync`, so `npx @spxrogers/agentsync` tracks it too.
 #
 # Two ways in, both landing in the single `goreleaser` job below:
 #   1. push an annotated `vX.Y.Z` tag on a green commit (the laptop path —
@@ -217,7 +217,7 @@ jobs:
     needs: goreleaser
     uses: ./.github/workflows/docs-publish.yml
 
-  # Publish the just-released binaries to npm as `agentsync.cc` (npx/bunx). The
+  # Publish the just-released binaries to npm as `@spxrogers/agentsync`. The
   # steps live in the reusable `npm-publish` workflow
   # (.github/workflows/npm-publish.yml), which downloads the Release's archives
   # and checksums.txt rather than touching this run's build, and can also be run
