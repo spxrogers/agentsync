@@ -46,8 +46,8 @@ archives:
     # Pin every in-archive entry's mtime to the commit date (RFC3339) so re-cutting
     # a release produces byte-identical archives — empirically verified in issue #173
     # by diffing two snapshot releases: all six tar.gz/zip archives (and every
-    # extracted binary) hashed identically run-to-run. goreleaser (2.20.2 as pinned) has
-    # no top-level archives.mtime, so the binary is pinned via builds_info.mtime and the
+    # extracted binary) hashed identically run-to-run. The pinned goreleaser has no
+    # top-level archives.mtime, so the binary is pinned via builds_info.mtime and the
     # bundled docs (the same LICENSE/README/CHANGELOG set goreleaser includes by
     # default) via files[].info.mtime. The binary itself is already host-independent
     # (-trimpath + mod_timestamp above); this pins the wall-clock mtime the tar/zip
@@ -153,18 +153,19 @@ nfpms:
 # Homebrew 7.0 deprecated two stanzas the cask used to carry, and `brew`
 # warned about both on every install/upgrade:
 #   - `url "…", verified: "…"` — Homebrew now checks the download URL against
-#     `homepage` itself, so `url.verified` is gone (goreleaser 2.20 also marks it
-#     deprecated). Both URL and homepage live under github.com/spxrogers/agentsync.
+#     `homepage` itself, so `url.verified` is gone (goreleaser 2.19+ also marks
+#     it deprecated). Both URL and homepage live under github.com/spxrogers/agentsync.
 #   - Ruby `postflight do … end` blocks — replaced by the declarative
-#     `postflight_steps`, which accepts only literal-argument steps (`run`,
-#     `on_macos`, …) and Homebrew's `{{staged_path}}` token instead of Ruby
-#     `#{staged_path}` interpolation. goreleaser renders it from
+#     `postflight_steps`, which accepts only literal-argument steps such as
+#     `run` (optionally inside guards like `on_macos`) and Homebrew's
+#     `{{staged_path}}` token instead of Ruby `#{staged_path}` interpolation. goreleaser renders it from
 #     `hooks.post.install_steps` (2.19+); `{{ .StagedPath }}` emits the literal
 #     `{{staged_path}}` token, which Homebrew fills in at install time.
 # `must_succeed: false` keeps the old `system_command` behavior of not failing
 # the install when there is no quarantine xattr to remove. ci.yml ("Guard
 # rendered Homebrew cask…") fails the build if either deprecated stanza comes
-# back in the rendered cask.
+# back in the rendered cask. Loading `run …, must_succeed:` inside `on_macos`
+# needs brew >= 6.0.13; `brew install`/`upgrade` auto-update past that by default.
 # --------------------------------------------------------------------------
 
 homebrew_casks:
