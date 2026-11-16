@@ -55,13 +55,14 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   all in one scope so nobody else can publish under those names, selected as an
   optional dependency with no install script, so `bunx` and `--ignore-scripts`
   work. The binaries are the GitHub Release's own, sha256-checked against its
-  `checksums.txt`, and published with npm provenance. The launcher passes argv,
+  `checksums.txt`, and published with npm provenance via npm trusted publishing
+  (OIDC from the release workflow; no npm token is stored). The launcher passes argv,
   stdio, and the exit status through unchanged, forwards signals, and names the
   missing platform package when optional dependencies were omitted. Re-running a
   publish skips only packages whose registry tarball is identical to ours
-  (anything else fails the run before the launcher is published), and
-  backfilling an older release uses the `backfill` dist-tag so `latest` never
-  moves backwards. See `npm/` and `.github/workflows/npm-publish.yml`.
+  (anything else fails the run before the launcher is published), and a patch
+  on an older release line uses the `backfill` dist-tag so `latest` never moves
+  backwards. See `npm/` and `.github/workflows/npm-publish.yml`.
 - **Dedicated Grok Build adapter** (`agentsync agent add grok`) with user/project
   instructions, complete skill directories, legacy Markdown commands, TOML MCP,
   and JSON command hooks. Includes detection, `GROK_HOME`, import/reconcile,
