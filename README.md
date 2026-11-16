@@ -147,6 +147,23 @@ Each new Chocolatey version goes through the community repository's automated
 checks before it's publicly installable, so a fresh release can lag the other
 channels by a few hours.
 
+### Any platform — npm / Bun
+
+Install it globally, then run the `agentsync` command it installs. The npm
+package is `@spxrogers/agentsync` (scoped, because the unscoped `agentsync` on
+npm belongs to an unrelated project):
+
+    npm install -g @spxrogers/agentsync   # or: bun add -g @spxrogers/agentsync
+    agentsync --version
+
+To try it without installing: `npx @spxrogers/agentsync --version` (or `bunx`).
+
+The package is a small Node launcher plus a prebuilt binary for your platform
+(linux / darwin / win32 × x64 / arm64), pulled in as an optional dependency, with
+no install script. The binaries are the ones on the GitHub Release, verified
+against its `checksums.txt` before packing. Installing with `--omit=optional`
+leaves the binary out; the launcher tells you so.
+
 ### Any platform — prebuilt binary
 
 Download the archive for your OS/arch from the

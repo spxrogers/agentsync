@@ -9,3 +9,7 @@
 # interpreter lookup, so they get the same pin rather than relying on luck.
 *.sh text eol=lf
 justfile text eol=lf
+
+# The npm launcher is published from Linux CI, but a CRLF `#!/usr/bin/env node`
+# line packed from a Windows checkout would break every POSIX install.
+npm/bin/agentsync.js text eol=lf
