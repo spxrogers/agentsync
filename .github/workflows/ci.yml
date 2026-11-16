@@ -229,7 +229,7 @@ jobs:
           # Pinned to match the publish job (release.yml) and `just ci` so the
           # config is validated by the exact goreleaser that ships it — the
           # version-parity guard in the lint job enforces this (issue #138).
-          version: "2.16.0"
+          version: "2.20.2"
           # Validate the ENTIRE .goreleaser.yaml first — including the
           # publish-phase scoop/chocolatey blocks the snapshot below skips — so a
           # schema/template typo fails CI in ~1s instead of mid-release at tag-cut
@@ -238,7 +238,7 @@ jobs:
           args: check
       - uses: goreleaser/goreleaser-action@v6
         with:
-          version: "2.16.0"
+          version: "2.20.2"
           # --skip publish already skips the (publish-phase) scoop/chocolatey
           # pipes; chocolatey AND sign are also named explicitly because their
           # steps shell out to CLIs this CI runner does not install — `choco`
@@ -249,6 +249,42 @@ jobs:
           # validates the signs: block's schema. CI only proves the cross-build
           # stays viable — release.yml is the run that actually signs.
           args: release --snapshot --skip=publish,chocolatey,sign --clean
+      # Homebrew 7.0 deprecated `url …, verified:` and the Ruby
+      # pre/postflight blocks; a cask carrying either makes `brew` warn on
+      # every install/upgrade. `goreleaser check` above already rejects the
+      # deprecated goreleaser fields, but this asserts on the RENDERED cask the
+      # tap actually receives, so a custom_block or a goreleaser template change
+      # can't sneak them back in. It also pins the replacement: a
+      # `postflight_steps` block carrying Homebrew's literal `{{staged_path}}`
+      # token (goreleaser's `{{ .StagedPath }}` field), not an unrendered Go
+      # template or a Ruby `#{…}` interpolation.
+      - name: Guard rendered Homebrew cask is free of deprecated stanzas
+        run: |
+          set -euo pipefail
+          cask=dist/homebrew/Casks/agentsync.rb
+          if [ ! -f "$cask" ]; then
+            echo "::error file=.goreleaser.yaml::snapshot did not render $cask — the homebrew_casks output path moved, update this guard"
+            exit 1
+          fi
+          fails=0
+          if ! grep -qE '^[[:space:]]*postflight_steps do' "$cask"; then
+            echo "::error file=.goreleaser.yaml::rendered cask has no postflight_steps block (the quarantine-strip hook is missing)"; fails=1
+          fi
+          if ! grep -qF '{{staged_path}}/agentsync' "$cask"; then
+            echo "::error file=.goreleaser.yaml::rendered cask's postflight_steps does not reference the literal {{staged_path}}/agentsync token"; fails=1
+          fi
+          if grep -qE '^[[:space:]]*(uninstall_)?(pre|post)flight do' "$cask"; then
+            echo "::error file=.goreleaser.yaml::rendered cask uses a Ruby pre/postflight block, deprecated in Homebrew 7.0 — use hooks.*.install_steps"; fails=1
+          fi
+          if grep -qE 'verified:' "$cask"; then
+            echo "::error file=.goreleaser.yaml::rendered cask passes verified: to url, deprecated in Homebrew 7.0 — drop homebrew_casks.url.verified"; fails=1
+          fi
+          # (`#{version}` in the url lines is fine: that is ordinary cask Ruby.)
+          if grep -qF '#{staged_path}' "$cask"; then
+            echo "::error file=.goreleaser.yaml::rendered cask interpolates Ruby #{staged_path}, which the steps DSL does not evaluate — use {{ .StagedPath }}"; fails=1
+          fi
+          [ "$fails" -eq 0 ] && echo "rendered cask uses postflight_steps and no deprecated stanzas"
+          exit "$fails"
       # npm distribution (`npx @spxrogers/agentsync`, see npm/): run
       # the launcher + builder unit tests, then build the npm packages from THIS
       # snapshot's archives (checksum-verified, exactly as npm-publish.yml does

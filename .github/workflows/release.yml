@@ -174,7 +174,7 @@ jobs:
           # go-version-file). One invocation builds every channel — GitHub Release,
           # archives/checksums, deb/rpm, Homebrew cask, Scoop bucket, and (when the
           # push key is present) the Chocolatey .nupkg — from one set of artifacts.
-          version: "2.16.0"
+          version: "2.20.2"
           # `skip` is empty when the choco key is present (the chocolatey pipe runs)
           # or `--skip=chocolatey` when absent (every other channel still ships).
           args: release --clean ${{ steps.choco_flag.outputs.skip }}

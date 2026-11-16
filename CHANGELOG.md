@@ -102,6 +102,19 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Fixed
 
+- **`brew install`/`brew upgrade agentsync` no longer prints Homebrew 7.0
+  deprecation warnings.** The generated cask passed `verified:` to its `url`
+  lines and stripped the macOS quarantine flag in a Ruby `postflight do` block.
+  Homebrew 7.0 deprecated both. The cask now leaves out `verified:`, since
+  Homebrew checks the URL against `homepage` itself, and does the same
+  quarantine strip in a declarative `postflight_steps` block. Install behavior
+  is unchanged. The release toolchain moves from goreleaser 2.16.0 to 2.20.2 in
+  CI, the release workflow and `just ci`, because 2.19.0 is the first version
+  that can generate `postflight_steps`. goreleaser 2.19+ needs Go 1.27 to
+  build, which `go run` downloads automatically under the default
+  `GOTOOLCHAIN=auto`. A new CI step reads the generated cask and fails if
+  either deprecated stanza comes back. The fix reaches the tap with the next
+  tagged release.
 - **Numbers in Codex's `config.toml` no longer render as strings.** `MergeTOML`
   passed `json.Number` values through to the TOML encoder, which marshaled them
   as quoted strings — so an MCP server's `startup_timeout_sec = 10` came back as
