@@ -350,7 +350,7 @@ export function publish({ version, dirs, provenance = false, dryRun = false, npm
 						'If it is us, this build differs from the one published: the npm/ tooling, LICENSE, or ' +
 						'README changed since then (a backfill of a pre-npm tag uses the default branch), or the ' +
 						'Node/npm version that packed it did (npm/.node-version pins one). Recover by re-running the ' +
-						'failed job or dispatching npm-publish for the tag; failing that, cut a patch release.',
+						"release run's failed npm job; failing that, cut a patch release.",
 				);
 			}
 			log(`skip ${name}@${version}: already published (identical tarball)`);

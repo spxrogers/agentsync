@@ -9,10 +9,13 @@ name: npm-publish
 # Two ways in, both landing in the single `npm` job below:
 #   1. called by the `release` workflow (`workflow_call`) once GoReleaser has
 #      published the GitHub Release, so every release reaches npm.
-#   2. triggered manually ("Actions → npm-publish → Run workflow") with a tag, to
-#      publish (or finish publishing) an EXISTING release without re-running
-#      GoReleaser — to recover a failed npm step, or to backfill a version tagged
-#      before npm/ existed. The ref you start it from doesn't matter: the job
+#   2. triggered manually ("Actions → npm-publish → Run workflow") with a tag.
+#      This only ever DRY-RUNS: it rebuilds an existing release's packages and
+#      checks them against the registry (identical, missing, or different), but
+#      can't publish, because npm's trusted publishers are registered for
+#      release.yml only (see Auth). To recover a failed npm step, re-run the
+#      release run's failed npm job; past GitHub's re-run window, cut a patch
+#      release. The ref you start it from doesn't matter: the job
 #      checks out the TAG and packages with the npm/ tooling and Node pin
 #      (npm/.node-version) it carries, falling back to the default branch's only
 #      when the tag predates npm/. Only the workflow steps themselves come from
@@ -25,27 +28,27 @@ name: npm-publish
 # is safe: a name@version already on the registry is skipped when its tarball is
 # identical to ours, and FAILS the run when it isn't — the launcher must never pin
 # a platform package whose bytes we didn't build. Building from the tag with the
-# tag's pinned Node is what keeps a re-run byte-identical. A stable version older than the
-# current `latest` is published under the `backfill` dist-tag, so backfilling
-# never downgrades `npx @spxrogers/agentsync`.
+# tag's pinned Node is what keeps a re-run byte-identical. A stable version older
+# than the current `latest` (a patch on an old release line) is published under
+# the `backfill` dist-tag, so it never downgrades `npx @spxrogers/agentsync`.
 #
-# Auth — gated like Chocolatey: with no credential the job still builds and
+# Auth — npm trusted publishing (OIDC) only; no npm token is stored anywhere.
+# The job publishes when the repository variable NPM_TRUSTED_PUBLISHING is
+# 'true' AND the run was started by release.yml. Otherwise it builds and
 # dry-runs the packages (so the path is proven every release), then stops.
-#   - NPM_TOKEN secret set → publish with that token (the bootstrap path: npm only
-#     lets you configure trusted publishing on packages that already exist).
-#   - else repository variable NPM_TRUSTED_PUBLISHING == 'true' → publish via npm
-#     trusted publishing (OIDC, no stored secret). Configure it on each of the
-#     seven packages for BOTH release.yml and npm-publish.yml: npm checks the
-#     workflow that started the run, which is release.yml when called from there.
-#     Each trusted publisher must allow `npm publish` (Allowed actions): ones
-#     created since 2026-09-03 default to `npm stage publish` only, and this job
-#     publishes directly.
-# Either way the packages carry npm provenance (hence id-token: write).
+# Each of the seven packages has ONE trusted publisher, for release.yml: npm
+# checks the workflow that started the run, which is release.yml when it calls
+# this one. None is registered for npm-publish.yml (a new publisher expires
+# unless it publishes within 2 days, and direct dispatches are rare), hence the
+# dry-run on a direct dispatch. Each trusted publisher must allow `npm publish`
+# (Allowed actions): ones created since 2026-09-03 default to `npm stage
+# publish` only, and this job publishes directly. The packages carry npm
+# provenance (hence id-token: write).
 on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag to publish to npm, e.g. v0.16.0"
+        description: "Release tag to rebuild and dry-run against npm (a dispatch never publishes), e.g. v0.17.0"
         required: true
         type: string
   workflow_call:
@@ -54,11 +57,6 @@ on:
         description: "Release tag to publish to npm"
         required: true
         type: string
-    # Declared (not `secrets: inherit`) so the caller hands over this one secret
-    # and nothing else. Optional: without it the job dry-runs or uses OIDC.
-    secrets:
-      NPM_TOKEN:
-        required: false
 
 # contents:read to download the Release assets; id-token:write for provenance and
 # trusted publishing. A caller must grant both (release.yml's `npm` job does).
@@ -88,20 +86,23 @@ jobs:
             echo "::error::tag '$TAG' is not v+semver (e.g. v0.16.0)"
             exit 1
           fi
-      - name: Detect npm credential
+      - name: Choose publish or dry-run
         id: auth
         shell: bash
         env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
           TRUSTED: ${{ vars.NPM_TRUSTED_PUBLISHING }}
+          # In a called workflow the github context is the CALLER's, so this
+          # names release.yml there and npm-publish.yml on a direct dispatch.
+          WORKFLOW_REF: ${{ github.workflow_ref }}
         run: |
-          if [ -n "${NPM_TOKEN//[[:space:]]/}" ]; then
-            echo "mode=token" >> "$GITHUB_OUTPUT"
-          elif [ "$TRUSTED" = "true" ]; then
+          if [ "$TRUSTED" != "true" ]; then
+            echo "mode=dry-run" >> "$GITHUB_OUTPUT"
+            echo "::notice::npm trusted publishing is not enabled (NPM_TRUSTED_PUBLISHING var not 'true') — building and dry-running the packages only"
+          elif [[ "$WORKFLOW_REF" == */.github/workflows/release.yml@* ]]; then
             echo "mode=oidc" >> "$GITHUB_OUTPUT"
           else
             echo "mode=dry-run" >> "$GITHUB_OUTPUT"
-            echo "::notice::npm publishing is not configured (no NPM_TOKEN secret, NPM_TRUSTED_PUBLISHING var not 'true') — building and dry-running the packages only"
+            echo "::notice::npm's trusted publishers are registered for release.yml, so this direct dispatch can't publish — building and dry-running the packages only. To recover a failed npm step, re-run the release run's failed npm job (see CONTRIBUTING.md)."
           fi
       # Package with the npm/ tooling (launcher included) the release TAG carries,
       # whatever ref the run was started from: a re-run or a dispatch for the tag
@@ -148,9 +149,8 @@ jobs:
         with:
           node-version: ${{ steps.pin.outputs.version }}
           registry-url: https://registry.npmjs.org
-      # Every real publish needs npm >= 11.5.1: trusted publishing requires it,
-      # and an older npm silently ignores --provenance, so a token publish would
-      # ship without provenance instead of failing.
+      # Every real publish needs npm >= 11.5.1: trusted publishing requires it
+      # (and an older npm would silently ignore --provenance).
       - name: Check npm supports provenance and trusted publishing (>= 11.5.1)
         if: steps.auth.outputs.mode != 'dry-run'
         run: |
@@ -173,8 +173,6 @@ jobs:
         env:
           TAG: ${{ inputs.tag }}
           MODE: ${{ steps.auth.outputs.mode }}
-          # Empty unless publishing with a token; trusted publishing needs none.
-          NODE_AUTH_TOKEN: ${{ steps.auth.outputs.mode == 'token' && secrets.NPM_TOKEN || '' }}
         run: |
           set -euo pipefail
           mode=(--provenance)
