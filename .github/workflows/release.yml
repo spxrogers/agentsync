@@ -222,8 +222,10 @@ jobs:
   # (.github/workflows/npm-publish.yml), which downloads the Release's archives
   # and checksums.txt rather than touching this run's build, and can also be run
   # manually for any existing tag. That makes it the recovery path too: if this
-  # job fails, re-run it (already-published packages are skipped) or dispatch
-  # npm-publish for the tag, without re-running GoReleaser. Gated on `goreleaser`
+  # job fails, re-run it (already-published packages are skipped) or, with an
+  # NPM_TOKEN set, dispatch npm-publish for the tag, without re-running
+  # GoReleaser. npm's trusted publishers are registered for THIS workflow, so
+  # under trusted publishing re-running is the recovery path. Gated on `goreleaser`
   # only; a failure here doesn't block the docs deploy. Without an npm credential
   # it builds and dry-runs the packages, then stops. The job-level permissions
   # REPLACE the workflow default, so grant what the called workflow needs:

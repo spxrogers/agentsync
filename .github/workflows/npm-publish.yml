@@ -12,7 +12,10 @@ name: npm-publish
 #   2. triggered manually ("Actions → npm-publish → Run workflow") with a tag, to
 #      publish (or finish publishing) an EXISTING release without re-running
 #      GoReleaser — to recover a failed npm step, or to backfill a version tagged
-#      before npm/ existed. The ref you start it from doesn't matter: the job
+#      before npm/ existed. Publishing this way needs the NPM_TOKEN secret: the
+#      trusted publisher is registered for release.yml only (see Auth), so under
+#      trusted publishing recover by re-running the release run's failed npm job
+#      instead. The ref you start it from doesn't matter: the job
 #      checks out the TAG and packages with the npm/ tooling and Node pin
 #      (npm/.node-version) it carries, falling back to the default branch's only
 #      when the tag predates npm/. Only the workflow steps themselves come from
@@ -34,12 +37,14 @@ name: npm-publish
 #   - NPM_TOKEN secret set → publish with that token (the bootstrap path: npm only
 #     lets you configure trusted publishing on packages that already exist).
 #   - else repository variable NPM_TRUSTED_PUBLISHING == 'true' → publish via npm
-#     trusted publishing (OIDC, no stored secret). Configure it on each of the
-#     seven packages for BOTH release.yml and npm-publish.yml: npm checks the
-#     workflow that started the run, which is release.yml when called from there.
-#     Each trusted publisher must allow `npm publish` (Allowed actions): ones
-#     created since 2026-09-03 default to `npm stage publish` only, and this job
-#     publishes directly.
+#     trusted publishing (OIDC, no stored secret). Each of the seven packages has
+#     ONE trusted publisher, for release.yml: npm checks the workflow that
+#     started the run, which is release.yml when called from there. None is
+#     registered for npm-publish.yml (a new publisher expires unless it publishes
+#     within 2 days, and direct dispatches are rare), so a direct dispatch in
+#     this mode fails up front instead of at npm's auth. Each trusted publisher
+#     must allow `npm publish` (Allowed actions): ones created since 2026-09-03
+#     default to `npm stage publish` only, and this job publishes directly.
 # Either way the packages carry npm provenance (hence id-token: write).
 on:
   workflow_dispatch:
@@ -94,10 +99,19 @@ jobs:
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
           TRUSTED: ${{ vars.NPM_TRUSTED_PUBLISHING }}
+          # In a called workflow the github context is the CALLER's, so this
+          # names release.yml there and npm-publish.yml on a direct dispatch.
+          WORKFLOW_REF: ${{ github.workflow_ref }}
         run: |
           if [ -n "${NPM_TOKEN//[[:space:]]/}" ]; then
             echo "mode=token" >> "$GITHUB_OUTPUT"
           elif [ "$TRUSTED" = "true" ]; then
+            case "$WORKFLOW_REF" in
+              */.github/workflows/npm-publish.yml@*)
+                echo "::error::npm trusted publishing is registered for release.yml, not npm-publish.yml, so a direct dispatch can't authenticate. Re-run the release run's failed npm job instead, or set the NPM_TOKEN secret for a one-off publish (see CONTRIBUTING.md)."
+                exit 1
+                ;;
+            esac
             echo "mode=oidc" >> "$GITHUB_OUTPUT"
           else
             echo "mode=dry-run" >> "$GITHUB_OUTPUT"

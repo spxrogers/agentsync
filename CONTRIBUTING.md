@@ -174,12 +174,16 @@ check doesn't apply; users only type `@spxrogers/agentsync`, and the command
 is `agentsync`.
 
 A name@version already on the registry is skipped if its tarball is identical to
-ours, so **re-running the failed job**, or dispatching **npm-publish** with the
-release tag, is how you recover a failed npm step. It never re-runs GoReleaser,
-and it doesn't matter which branch you dispatch from: the job checks out the
-*tag* and packages with the `npm/` tooling that tag carries, on a pinned Node, so
-the rebuilt tarballs are byte-identical. A tag cut before `npm/` existed falls
-back to the default branch's tooling; that is how you backfill an old release.
+ours, so **re-running the failed job** (*Re-run failed jobs* on the release run)
+is how you recover a failed npm step. It never re-runs GoReleaser. Dispatching
+**npm-publish** with the release tag does the same from any branch, but only
+while an `NPM_TOKEN` secret is set: npm matches a trusted publisher against the
+workflow that *started* the run, ours is registered for `release.yml` (see
+below), so a direct dispatch can't authenticate through it and the job refuses
+up front. Either way the job checks out the *tag* and packages with the `npm/`
+tooling that tag carries, on a pinned Node, so the rebuilt tarballs are
+byte-identical. A tag cut before `npm/` existed falls back to the default
+branch's tooling; that is how you backfill an old release (a token publish).
 If a registry copy *differs*, the run fails before the launcher is published,
 and the error names who published it. If that isn't you, stop and investigate.
 If it is, something changed between attempts (the default branch's tooling for a
@@ -197,7 +201,8 @@ The workflow always packages the tag, whatever ref it is run from. That is a
 guard against mistakes, not a security boundary: anyone who can push to the
 repository can edit the workflow or the tag's tooling. To gate publishing on
 review, put the job in a GitHub `environment:` restricted to `v*` tags with
-required reviewers, and bind the npm trusted publishers to that environment.
+required reviewers, and bind the npm trusted publishers to that environment
+(an existing publisher can't be edited: delete it and add a new one).
 
 CI builds the packages from every goreleaser snapshot and installs them through
 npx and bunx (`npm/smoke.sh`); `node --test npm/*.test.mjs` runs the unit tests.
@@ -215,21 +220,38 @@ job builds and dry-runs the packages, then stops. To go live:
    Save it as the `NPM_TOKEN` repository secret, then run **npm-publish** with
    the latest tag to create all seven packages (a tag cut before `npm/` existed
    uses the default branch's tooling automatically).
-2. **Switch to trusted publishing (no stored secret).** On npmjs.com, add a
-   GitHub Actions trusted publisher to each of the seven packages, for this
-   repository with workflow `release.yml` **and** again with workflow
-   `npm-publish.yml`. npm matches the workflow that *started* the run, which is
-   `release.yml` when the npm job is called from a release. On each of them,
-   tick **`npm publish`** under *Allowed actions*: trusted publishers created
+2. **Switch to trusted publishing (no stored secret), right before a release.**
+   npm expires a new trusted publisher that hasn't completed a successful
+   publish within 2 days, so set this up when the next release is ready to cut.
+   Give each of the seven packages **one** GitHub Actions trusted publisher:
+   this repository, workflow **`release.yml`**, no environment. npm matches the
+   workflow that *started* the run, and the npm job runs inside the release run.
+   Tick **`npm publish`** under *Allowed actions*: trusted publishers created
    since 2026-09-03 allow only `npm stage publish` by default, and the job
-   publishes directly, so it would fail without that. Set the repository
-   variable `NPM_TRUSTED_PUBLISHING=true`, then delete the `NPM_TOKEN` secret.
-   (The token takes precedence while it exists.)
-3. **Retire the token.** Deleting the GitHub secret does not revoke the token
-   itself, which can still publish every package and bypasses 2FA. Revoke it on
-   npmjs.com (*Access Tokens*), then set each of the seven packages' *Settings →
-   Publishing access* to **Require two-factor authentication and disallow
-   tokens**. Trusted publishing is not a token and keeps working.
+   publishes directly, so it would fail without that. Don't also register
+   `npm-publish.yml`: a direct dispatch is rare, so that publisher would expire
+   before its first publish. Use the package's *Settings → Trusted publishing*
+   on npmjs.com, or, from a terminal logged in to npm (npm >= 11.15.0, 2FA on
+   the account; a bypass-2FA token can't do this):
+
+   ```bash
+   for p in agentsync agentsync-{linux,darwin,win32}-{x64,arm64}; do
+     npm trust github "@spxrogers/$p" --repo spxrogers/agentsync --file release.yml --allow-publish
+   done
+   npm trust list @spxrogers/agentsync   # check one
+   ```
+
+   Then set the repository variable `NPM_TRUSTED_PUBLISHING=true`, delete the
+   `NPM_TOKEN` secret (it takes precedence while it exists, and the release
+   wouldn't exercise the publishers), and cut the release. Its npm job is the
+   proof. If it fails to authenticate, nothing is published: fix the publisher,
+   then re-run the failed job.
+3. **Retire the token**, once that release is on npm. Deleting the GitHub secret
+   does not revoke the token itself, which can still publish every package and
+   bypasses 2FA. Revoke it on npmjs.com (*Access Tokens*), then set each of the
+   seven packages' *Settings → Publishing access* to **Require two-factor
+   authentication and disallow tokens**. Trusted publishing is not a token and
+   keeps working.
 
 ## Reporting bugs & requesting features
 
