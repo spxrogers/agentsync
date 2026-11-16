@@ -119,8 +119,8 @@ jobs:
             echo "::error file=.goreleaser.yaml::publisher token/private_key must use a bare {{ .Env.X }} template — envOrDefault/isEnvSet are unavailable in that context and fail at publish"
             exit 1
           fi
-      # The goreleaser version is pinned in FOUR places (ci.yml x2, release.yml
-      # x1, justfile x1). This is the C3 "dual-list drift" class — assert they
+      # The goreleaser version is pinned in FIVE places (ci.yml x2, release.yml
+      # x1, justfile x1, scripts/reproducibility-diff.sh x1). This is the C3 "dual-list drift" class — assert they
       # never diverge, so the toolchain that validates a release can't differ
       # from the one that ships it (issue #138). The workflow-side pins are
       # anchored to the goreleaser-action steps themselves (the `version:` input
@@ -132,7 +132,7 @@ jobs:
       # `version:`), so a COMMENT inside a step's lines — a full comment line or
       # a trailing `# version: "N.N.N"` remark — can never satisfy the count or
       # feed a bogus version into the parity comparison.
-      - name: Guard goreleaser version pin (CI == release == just)
+      - name: Guard goreleaser version pin (CI == release == just == repro script)
         run: |
           set -euo pipefail
           wf='.github/workflows/ci.yml .github/workflows/release.yml'
@@ -149,17 +149,17 @@ jobs:
                 v=substr($0, RSTART, RLENGTH); gsub(/[^0-9.]/, "", v); print v; instep=0
               }
             ' $wf
-            grep -hoE 'goreleaser/v2@v[0-9]+\.[0-9]+\.[0-9]+' justfile | grep -oE '[0-9]+\.[0-9]+\.[0-9]+'
+            grep -hoE 'goreleaser/v2@v[0-9]+\.[0-9]+\.[0-9]+' justfile scripts/reproducibility-diff.sh | grep -oE '[0-9]+\.[0-9]+\.[0-9]+'
           )
-          if [ "${#vers[@]}" -ne "$((steps + 1))" ]; then
-            echo "::error::found $steps goreleaser-action step(s) plus the justfile pin, but ${#vers[@]} version pin(s) (${vers[*]:-none}) — every goreleaser-action step must carry a quoted version: pin and the justfile go-run pin must be present"
+          if [ "${#vers[@]}" -ne "$((steps + 2))" ]; then
+            echo "::error::found $steps goreleaser-action step(s) plus the justfile and scripts/reproducibility-diff.sh pins, but ${#vers[@]} version pin(s) (${vers[*]:-none}) — every goreleaser-action step must carry a quoted version: pin and both go-run pins must be present"
             exit 1
           fi
           if [ "$(printf '%s\n' "${vers[@]}" | sort -u | wc -l)" -ne 1 ]; then
-            echo "::error::goreleaser version pins disagree across ci.yml / release.yml / justfile: ${vers[*]}"
+            echo "::error::goreleaser version pins disagree across ci.yml / release.yml / justfile / scripts/reproducibility-diff.sh: ${vers[*]}"
             exit 1
           fi
-          echo "goreleaser pinned consistently to ${vers[0]} across $steps goreleaser-action step(s) + justfile"
+          echo "goreleaser pinned consistently to ${vers[0]} across $steps goreleaser-action step(s) + justfile + repro script"
       # The nfpms file_name_template is version-less specifically so the README's
       # releases/latest/download/ URLs resolve. Assert the coupling so a change to
       # either side fails CI instead of silently 404ing the install command (#138).
@@ -229,7 +229,7 @@ jobs:
           # Pinned to match the publish job (release.yml) and `just ci` so the
           # config is validated by the exact goreleaser that ships it — the
           # version-parity guard in the lint job enforces this (issue #138).
-          version: "2.16.0"
+          version: "2.20.2"
           # Validate the ENTIRE .goreleaser.yaml first — including the
           # publish-phase scoop/chocolatey blocks the snapshot below skips — so a
           # schema/template typo fails CI in ~1s instead of mid-release at tag-cut
@@ -238,7 +238,7 @@ jobs:
           args: check
       - uses: goreleaser/goreleaser-action@v6
         with:
-          version: "2.16.0"
+          version: "2.20.2"
           # --skip publish already skips the (publish-phase) scoop/chocolatey
           # pipes; chocolatey AND sign are also named explicitly because their
           # steps shell out to CLIs this CI runner does not install — `choco`
@@ -249,6 +249,53 @@ jobs:
           # validates the signs: block's schema. CI only proves the cross-build
           # stays viable — release.yml is the run that actually signs.
           args: release --snapshot --skip=publish,chocolatey,sign --clean
+      # Homebrew 7.0 deprecated `url …, verified:` and the Ruby
+      # pre/postflight blocks; a cask carrying either makes `brew` warn on
+      # every install/upgrade. `goreleaser check` above already rejects the
+      # deprecated goreleaser fields, but this asserts on the RENDERED cask the
+      # tap actually receives, so a custom_block or a goreleaser template change
+      # can't sneak them back in. It also pins the replacement: the
+      # `postflight_steps` block must run /usr/bin/xattr on Homebrew's literal
+      # `{{staged_path}}/agentsync` token (goreleaser's `{{ .StagedPath }}`
+      # field) — not an unrendered Go template or a Ruby `#{…}` interpolation.
+      # Comment lines are ignored throughout, so prose can neither satisfy nor
+      # trip a check.
+      - name: Guard rendered Homebrew cask is free of deprecated stanzas
+        run: |
+          set -euo pipefail
+          cask=dist/homebrew/Casks/agentsync.rb
+          if [ ! -f "$cask" ]; then
+            echo "::error file=.goreleaser.yaml::snapshot did not render $cask — the homebrew_casks output path moved, update this guard"
+            exit 1
+          fi
+          code=$(grep -vE '^[[:space:]]*#' "$cask" || true)
+          # The postflight_steps block: from its opener to the first line back
+          # at the opener's indentation that is just `end`.
+          block=$(printf '%s\n' "$code" | awk '
+            !inb && match($0, /^[[:space:]]*postflight_steps[[:space:]]+do[[:space:]]*$/) { inb=1; ind=$0; sub(/[^[:space:]].*/, "", ind); print; next }
+            inb { print; if ($0 == ind "end") exit }
+          ')
+          fails=0
+          if [ -z "$block" ]; then
+            echo "::error file=.goreleaser.yaml::rendered cask has no postflight_steps block (the quarantine-strip hook is missing)"; fails=1
+          elif ! printf '%s\n' "$block" | grep -qE '^[[:space:]]*run "/usr/bin/xattr",.*"\{\{staged_path\}\}/agentsync"'; then
+            echo "::error file=.goreleaser.yaml::rendered cask's postflight_steps does not run /usr/bin/xattr on the literal {{staged_path}}/agentsync token"; fails=1
+          fi
+          # Any Ruby flight block (`postflight do`, `postflight {`, extra
+          # whitespace, …) — but not the `*_steps` replacements.
+          if printf '%s\n' "$code" | grep -qE '^[[:space:]]*(uninstall_)?(pre|post)flight([^_[:alnum:]]|$)'; then
+            echo "::error file=.goreleaser.yaml::rendered cask uses a Ruby pre/postflight block, deprecated in Homebrew 7.0 — use hooks.*.install_steps"; fails=1
+          fi
+          # `verified:` keyword or the `:verified =>` hash-rocket form.
+          if printf '%s\n' "$code" | grep -qE '(^|[^_[:alnum:]])verified[[:space:]]*:|:verified[[:space:]]*=>'; then
+            echo "::error file=.goreleaser.yaml::rendered cask passes verified: to url, deprecated in Homebrew 7.0 — drop homebrew_casks.url.verified"; fails=1
+          fi
+          # (`#{version}` in the url lines is fine: that is ordinary cask Ruby.)
+          if printf '%s\n' "$code" | grep -qF '#{staged_path}'; then
+            echo "::error file=.goreleaser.yaml::rendered cask interpolates Ruby #{staged_path}, which the steps DSL does not evaluate — use {{ .StagedPath }}"; fails=1
+          fi
+          [ "$fails" -eq 0 ] && echo "rendered cask uses postflight_steps and no deprecated stanzas"
+          exit "$fails"
       # npm distribution (`npx @spxrogers/agentsync`, see npm/): run
       # the launcher + builder unit tests, then build the npm packages from THIS
       # snapshot's archives (checksum-verified, exactly as npm-publish.yml does

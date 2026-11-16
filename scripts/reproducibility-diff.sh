@@ -38,9 +38,10 @@
 set -euo pipefail
 
 # Keep this pin in lock-step with ci.yml / release.yml / justfile — ci.yml's
-# "Guard goreleaser version pin" step asserts the workflow+justfile pins agree
-# (issue #138); this script reuses the justfile's `go run pkg@version` pattern.
-GORELEASER="github.com/goreleaser/goreleaser/v2@v2.16.0"
+# "Guard goreleaser version pin" step asserts the workflow, justfile and this
+# script's pins all agree (issue #138); this script reuses the justfile's
+# `go run pkg@version` pattern.
+GORELEASER="github.com/goreleaser/goreleaser/v2@v2.20.2"
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"

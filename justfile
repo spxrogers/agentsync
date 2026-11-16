@@ -132,11 +132,14 @@ docs-publish:
 # Full CI gate: lint + the hermetic release suite + the cross-build matrix.
 # goreleaser is pinned via `go run …@version` (the same self-enforcing pattern as
 # golangci-lint) so local `just ci` can't drift from the version CI/release use;
-# the ci.yml version-parity guard asserts all three agree (issue #138).
+# the ci.yml version-parity guard asserts they all agree (issue #138).
+# The pinned goreleaser (2.20.2) needs Go >= 1.27.4 to build, newer than go.mod's;
+# with the default GOTOOLCHAIN=auto, `go run` fetches that toolchain on its own
+# (GOTOOLCHAIN=local with an older go fails here).
 ci: lint test-release
     # Skip sign too: the snapshot signs by default, but cosign is a release-only
     # dep (release.yml installs it); `just ci` proves the cross-build, not signing.
-    go run github.com/goreleaser/goreleaser/v2@v2.16.0 release --snapshot --skip=publish,sign --clean
+    go run github.com/goreleaser/goreleaser/v2@v2.20.2 release --snapshot --skip=publish,sign --clean
     just npm-smoke
 
 # npm packaging (`npx @spxrogers/agentsync`): unit tests, then build the packages from the
