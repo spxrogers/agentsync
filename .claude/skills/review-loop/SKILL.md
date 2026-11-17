@@ -28,8 +28,8 @@ independently.
 "Done" means one thing: a round **converges** when its audited
 findings hold no `BLOCKER` and no `ISSUE` in any lens — each lens is
 CLEAN or reports NITs only. A finding the user deferred is not open,
-and neither is a *pre-existing* or an *out-of-scope* one (Step 2,
-item 6): it is filed for a follow-up PR, not fixed here. A PR that
+and neither is a *pre-existing* one or one filed as *out of scope*
+(Step 2, item 6): it is filed as follow-up work, not fixed here. A PR that
 is otherwise converged is never held in the loop by a defect it did
 not cause and does not worsen.
 
@@ -70,10 +70,7 @@ for round in 1..budget:
     break                                   # round gate — don't fix yet
   fix every accepted BLOCKER and ISSUE,     # MAIN SESSION ONLY — see below
     and every other instance of its class   # NITs wait for the exit;
-  commit + push                             # pre-existing and out-of-scope
-                                            # findings are filed; a pre-existing
-                                            # one the PR worsens is fixed in its
-                                            # own PR, and this PR rebased onto it
+  commit + push                             # filed, or its own PR: Step 2, item 6
   if nothing but findings awaiting the user's answer held the round open:
     wait for the answer                     # a grant may make the round converge: stop
 end
@@ -259,8 +256,8 @@ file outside the worktree (the session's scratchpad directory, or
   *pre-existing*; or *pre-existing, worsened by the PR*), its class
   when it has one, with the number of
   other instances the sweep found (Step 3), and what was done
-  (fixed in which commit; fixed in its own PR, naming the PR and the
-  commit this branch was rebased to; *held* at the round gate; a NIT *held for
+  (fixed in which commit; fixed in its own PR, naming the PR, its
+  head and the rewritten previous SHA; *held* at the round gate; a NIT *held for
   the exit*; *pre-existing — to be filed* or *out of scope — to be
   filed*, with the reason, then *filed as* its issue (a NIT:
   *listed*); proposed for
@@ -306,10 +303,12 @@ with:
    diff-only whatever their number. After this branch is rebased
    onto a fix's own PR (Step 3), `<base>` is the base recorded
    last — the fix's head, or the base branch once the fix has
-   merged — and `<previous-sha>` is the commit the rebase made of
-   the last reviewed one, both from the Round history: the old SHA is no
-   longer an ancestor, and a diff from it shows the fix PR's change
-   as this PR's.
+   merged — and `<previous-sha>` is the rewritten previous SHA, both
+   from the Round history: the old SHA is no longer an ancestor, and
+   a diff from it shows the fix PR's change as this PR's. If the
+   Round history records a fix's own PR, run its branch check
+   (Step 3, *A fix in its own PR*, step 4) before writing the
+   briefs.
 2. Their lens (which one of the four).
 3. A few lines on what changed in this round, in the brief itself;
    what the PR is lives in the context file (Step 0).
@@ -479,74 +478,48 @@ converged — carries no weight.
      is this audit. One neither of you can verify awaits the user's
      answer, like a proposed deferral (Step 3).
 
-6. **A finding outside this PR's job is filed for a follow-up PR,
-   not fixed, and holds no round open.** A valid finding about
-   something the PR did not cause would otherwise hold a finished
-   PR in the loop, round after round, while its fix grows into work
-   nobody asked this review to approve. Audit and rate it like any
-   other first — a lens's mark is a claim, checked against
-   `git diff <base>..<sha>` — and write its line of evidence in the
-   Round history as for an accepted finding. It is one of these:
+6. **Sort each audited finding into one of four kinds; only the
+   PR's own is fixed here.** Audit and rate it first — a lens's mark
+   is a claim, checked against `git diff <base>..<sha>` — and write
+   its line of evidence in the Round history as for an accepted
+   finding.
 
-   - **The PR's own**: a defect the PR causes, wherever it shows —
-     in a line the PR added or changed, or in unchanged code its
-     change breaks: code that was right for what it relied on, and
-     is wrong now because the PR changed that (a caller of a
-     contract it changed, an assumption it broke) — however far its
-     fix would reach. Fixed
-     here. When the whole fix would blow up the PR, propose a
+   | Kind | Test | What happens | Holds the round |
+   |---|---|---|---|
+   | *the PR's own* | the PR causes it: in a line it added or changed, or in unchanged code that was right until the PR changed what it relies on (a caller of a contract it changed, an assumption it broke) | fixed here, however far the fix reaches | yes |
+   | *pre-existing* | unchanged code, already wrong on its own terms — for an input or state the base allowed, whether or not anything reached it — and the PR makes it neither worse nor more likely | filed | no |
+   | *pre-existing, worsened by the PR* | as *pre-existing*, but the PR makes it worse or more likely: a new caller reaches it, a new input makes it fire, it fires more often or does more harm | a BLOCKER or ISSUE is fixed in its own PR, and this branch rebased onto it (Step 3, *A fix in its own PR*); a NIT is filed, reported and counted as *pre-existing* | a BLOCKER or ISSUE, until this branch sits on the fix |
+   | *out of scope* | not a defect (a defect is one of the three above): work the PR is correct and complete without — hardening, a refactor, making old code match a new pattern — that is *clearly* outside the PR's purpose (its title, its body, the user's framing), or would set off a chain of follow-on changes (other callers, other modules, a contract, their tests and docs) | filed, with the chain written in the Round history: the files or modules the fix would reach beyond the PR | no |
+
+   - **When in doubt whether a finding is the PR's own, it is.**
+   - **An expensive fix does not change the kind.** When the whole
+     fix to a defect the PR caused would blow up the PR, propose a
      deferral or a split to the user (Step 3) — only they decide.
-   - **Pre-existing**: the defect is in code this PR did not change,
-     and that code is wrong on its own terms — for an input or a
-     state it already allowed on the base, whether or not anything
-     reached it — and the PR neither makes it worse nor makes it
-     more likely to happen. Filed.
-   - **Pre-existing, worsened by the PR**: the defect is in code the
-     PR did not change, but the PR makes it worse or more likely —
-     a new caller reaches it, a new input makes it fire, it fires
-     more often or does more harm. **A worsened BLOCKER or ISSUE is
-     fixed in its own PR, and this branch is rebased onto that one**
-     (Step 3, *A fix in its own PR*). It holds the round at its
-     severity until this branch sits on the fix; a BLOCKER of this
-     kind is told to the user in a line when its round is
-     synthesized. A worsened NIT is filed, and reported and
-     counted, like a pre-existing one.
-   - **Out of scope**: never a defect — a defect is one of the
-     three above. It is work
-     beyond the PR — hardening, a refactor, making
-     old code match a new pattern — that the PR is correct and
-     complete without, and that either is *clearly* outside what
-     the PR is for (its title, its body, the user's framing), or
-     would set off a chain of follow-on changes — other callers,
-     other modules, a contract, their tests and docs — that would
-     grow the PR well past its purpose. Write the chain in the Round
-     history: the files or modules the fix would reach beyond the
-     PR. Filed.
+   - **A finding whose fix splits** — a local part in the PR's own
+     lines (call the existing helper instead of the PR's copy of it)
+     and a chain beyond them (consolidate every other copy) — is two
+     Round history entries: the PR's own for the local part, fixed
+     here, and *out of scope* for the rest, filed. A filed finding
+     that a lens later shows is partly the PR's own is split the
+     same way.
+   - **A worsened BLOCKER is told to the user** in a line when its
+     round is synthesized.
 
-   When in doubt whether a finding is the PR's own, it is. A finding
-   whose fix splits — a local part in the PR's own lines (call the
-   existing helper instead of the PR's copy of it) and a chain
-   beyond them (consolidate every other copy) — is two entries in
-   the Round history: the PR's own for the local part, fixed here,
-   and out of scope for the rest, filed. So is a filed finding a
-   lens later shows is partly the PR's own.
+   **Tell the lens what you filed against its mark.** The next
+   round's brief lists each BLOCKER or ISSUE you filed as *out of
+   scope*, with its chain, and each finding a lens marked
+   *pre-existing, worsened by the PR* that you filed as
+   *pre-existing*. If the lens shows the PR causes or worsens a
+   defect, sort the finding again, or that part of it. The final
+   report gives the lens's words, your reason, and the lens's answer
+   — or *not answered: no later round*. *Pre-existing* is otherwise
+   a fact the diff settles, and is not answered.
 
-   A filed finding — pre-existing or out of scope — then:
+   A filed finding — *pre-existing* or *out of scope* — then:
    - Does not hold the round, whatever its severity, and the loop
      does not fix it: a fix to code the PR did not touch, or work
      beyond the PR's purpose, is new scope, reviewed by nobody who
      was asked to review it. It is reviewed in its own PR.
-   - **Out of scope is your judgement, so the lens may answer it.**
-     A BLOCKER or ISSUE filed as out of scope is told to the lens
-     next round, with the chain you recorded, like an overrule
-     (item 4): if it shows the PR causes or worsens a defect, the
-     finding (or that part of it) is the PR's own or worsened. The
-     final report lists each, the lens's own words beside your
-     reason and its answer — or *not answered: no later round* —
-     so the owner sees what was filed instead of fixed. *Pre-existing*
-     is a fact the diff settles, except whether the PR worsens it: a
-     finding a lens marked *worsened* that you file as plain
-     pre-existing is told to that lens the same way.
    - Each filed BLOCKER or ISSUE is told to the user in the
      conversation, in a line — what it is, and why it is filed —
      when that round is synthesized, or when Step 3's class sweep
@@ -554,7 +527,7 @@ converged — carries no weight.
      for it to be fixed here.
    - Each filed BLOCKER or ISSUE gets a follow-up issue at
      the run's next report (Step 5); a filed NIT is listed only.
-     An out-of-scope one is ordinary follow-up work. Where the repo
+     An *out of scope* one is ordinary follow-up work. Where the repo
      names a parent issue for pre-existing findings (`.reviewlooprc`
      → *Reporting*), each pre-existing one is filed as a sub-issue of it, so one
      issue lists every pre-existing defect any run has found. Read
@@ -585,12 +558,12 @@ For each fix:
   your own `grep`. Fix every instance the PR introduced in the same
   commit, and record the class and the count in the Round history.
   One instance fixed per round is how a single mistake costs three
-  rounds. An instance in code the PR did not change is audited under
-  Step 2, item 6 — a caller the PR's change breaks is the PR's own,
-  and fixed with the rest: when it is pre-existing it is its own Round
+  rounds. An instance in code the PR did not change is sorted under
+  Step 2, item 6. A caller the PR's change breaks is the PR's own:
+  fix it with the rest. A *pre-existing* one is its own Round
   history entry, at the class's severity, filed at the run's next
-  report and unfixed; when the PR worsens it, it goes into the fix's
-  own PR (below). A search
+  report. One the PR worsens goes into the fix's own PR (below).
+  A search
   that finds nothing else is recorded too: "class swept, 0 more".
 - **Break-verify** non-trivial fixes: temporarily induce the bug
   (comment out the fix, sed-corrupt the contract), confirm the
@@ -645,12 +618,23 @@ For each fix:
 - **A fix follows the repo's own rules for what it touches**
   (`.reviewlooprc` → *Fixing*): a rule, say, that something
   already published is replaced by a new one rather than edited.
-- **A fix in its own PR** — for a pre-existing defect this PR
-  worsens (Step 2, item 6). The defect belongs to the base, so its
-  fix does too, where it can be reviewed and merged for what it is.
-  At most one such PR is open at a time: a later finding of this
-  kind is fixed on the same branch while its PR is open, and opens
-  a new one only after it has merged.
+- **A fix in its own PR** — for a BLOCKER or ISSUE marked
+  *pre-existing, worsened by the PR* (Step 2, item 6). Before
+  step 1:
+  - It is a fix like any other for the round gate and gated areas
+    (Steps 5 and 6): in the budget's last round it is *held*, not
+    made.
+  - If the session cannot open a PR or force-push this branch (the
+    repo's rules, its permissions, the user's instructions), do
+    neither: tell the user, and the finding awaits their answer,
+    like a proposed deferral.
+  - At most one such PR is open at a time: a later finding of this
+    kind is fixed on its branch while it is open, and opens a new
+    one only after it has merged.
+
+  The **rewritten previous SHA** is the commit a rebase made of the
+  last reviewed one: if N commits were made on top of that one, it
+  is `HEAD~N` right after the rebase.
   1. Branch from this PR's base, following the repo's rules for
      branches (`.reviewlooprc` → *Fixing*). Make the smallest
      correct fix there, with a test that fails without it
@@ -660,10 +644,8 @@ For each fix:
      `--force-with-lease=<branch>:<sha it had>`, and point this PR's
      base at the fix's branch, so its diff stays its own. Say in this
      PR's body that it merges after the fix's PR, never before. Record
-     in the Round history the fix's PR, its head, and the commit the
-     rebase made of the last reviewed one — the commit as many
-     commits below HEAD as were made on top of it since it was
-     reviewed (Step 1, item 1, reads them). A rebase that needed a
+     in the Round history the fix's PR, its head, and the rewritten
+     previous SHA (Step 1, item 1, reads them). A rebase that needed a
      conflict resolved is reviewed by no round diff: say what it
      changed in the next brief. Then make the round's other fixes on
      top.
@@ -677,13 +659,6 @@ For each fix:
      the base branch, which holds the fix but not its commits),
      point this PR's base there, push as in step 2, and record the
      new base and the rewritten previous SHA in the Round history.
-
-  It is a fix like any other for the round gate and gated areas
-  (Steps 5 and 6): in the budget's last round it is *held*, not
-  made. If the session cannot open a PR or force-push this branch
-  (the repo's rules, its permissions, the user's instructions), do
-  neither: tell the user, and the finding awaits their answer, like
-  a proposed deferral.
 - Update the prose the fix makes false — design documents,
   guides, code comments (`.reviewlooprc` →
   *Fixing* names the repo's) — in the SAME
@@ -759,13 +734,12 @@ open: each one still *held* (audited, never fixed), each one the
 user deferred, and each NIT deliberately not
 fixed or still *held for the exit* — and every overrule of a BLOCKER or ISSUE in the run (Step 2,
 item 4), and every BLOCKER or ISSUE accepted without verification
-(Step 2, item 5), with what its fix changed. The findings filed
-for a follow-up PR, and the fixes made in their own PR, have a
-section of their own ([`report.md`](report.md)): each with its
-severity, why it was filed — *pre-existing*, or *out of scope*
-with its chain and the lens's own words — and its issue or PR,
-which this PR merges after. A pre-existing,
-out-of-scope or
+(Step 2, item 5), with what its fix changed. Findings filed, and
+fixes made in their own PR, go in its `### Sent to another PR`
+section ([`report.md`](report.md)). If the Round history records a
+fix's own PR, run its branch check (Step 3, *A fix in its own PR*,
+step 4) before writing the report. A *pre-existing*, *out of
+scope* or
 deferred BLOCKER or ISSUE is follow-up work from the first report
 posted after it is recorded, and is filed once, then; one still *held* becomes
 follow-up work only once the run has ended (not at a report

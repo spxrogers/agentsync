@@ -55,8 +55,8 @@ by_lens: correctness=3 adversarial=2 api-design=1 test-rigor=4
 
 ## Findings sent to another PR
 
-A section headed `### Sent to another PR`, after the findings left open, in three lists, each
-finding one item with its severity, its lens(es), file:line and what is wrong, in a line:
+A section headed `### Sent to another PR`, after the findings left open. It has three lists.
+Each finding is one line: severity, lens(es), file:line, what is wrong, then what each list asks:
 
 - **Pre-existing — filed.** Each with how the audit showed the PR did not touch it, and its
   issue (or the open or *not planned* issue it was linked to instead). NITs are listed with no
