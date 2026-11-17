@@ -509,7 +509,8 @@ converged — carries no weight.
      (Step 3, *A fix in its own PR*). It holds the round at its
      severity until this branch sits on the fix; a BLOCKER of this
      kind is told to the user in a line when its round is
-     synthesized. A worsened NIT is filed like a pre-existing one.
+     synthesized. A worsened NIT is filed, and reported and
+     counted, like a pre-existing one.
    - **Out of scope**: never a defect — a defect is one of the
      three above. It is work
      beyond the PR — hardening, a refactor, making
@@ -755,8 +756,7 @@ for any of them:
 
 However the loop ends, the final report lists every finding left
 open: each one still *held* (audited, never fixed), each one the
-user deferred, each pre-existing or out-of-scope one (with its
-reason), and each NIT deliberately not
+user deferred, and each NIT deliberately not
 fixed or still *held for the exit* — and every overrule of a BLOCKER or ISSUE in the run (Step 2,
 item 4), and every BLOCKER or ISSUE accepted without verification
 (Step 2, item 5), with what its fix changed. The findings filed

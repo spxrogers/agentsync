@@ -60,7 +60,7 @@ finding one item with its severity, its lens(es), file:line and what is wrong, i
 
 - **Pre-existing — filed.** Each with how the audit showed the PR did not touch it, and its
   issue (or the open or *not planned* issue it was linked to instead). NITs are listed with no
-  issue.
+  issue; a NIT the PR worsened is listed here too, saying how.
 - **Out of scope — filed.** Each with why: *clearly outside the PR*, or the chain its fix would
   set off (the files or modules beyond the PR). For a BLOCKER or ISSUE, the lens's own words
   beside that reason, and how the lens answered when it was told (or *not answered: no later
@@ -90,7 +90,7 @@ there: a class with five instances is one, and a finding two lenses raised is on
 | `verified` | BLOCKERs and ISSUEs, by the lens's label and neither filed as pre-existing nor out of scope (a worsened one counts here), accepted at that label or above with the line of evidence that showed them real |
 | `accepted_unverified` | BLOCKERs and ISSUEs, neither pre-existing nor out of scope, accepted with the audit skipped |
 | `overruled` | BLOCKERs and ISSUEs, neither pre-existing nor out of scope, dropped as false or rated below the lens's label, and not withdrawn; one rated down and then fixed counts here only |
-| `pre_existing` | entries of any severity confirmed pre-existing and filed; not the ones the PR worsened |
+| `pre_existing` | entries of any severity confirmed pre-existing and filed, a worsened NIT included; not a worsened BLOCKER or ISSUE |
 | `out_of_scope` | entries of any severity filed as out of scope |
 | `fixed_in_own_pr` | entries the PR worsened, fixed in their own PR; also counted in `verified` or `accepted_unverified` |
 | `missed_by_whole_pr_rounds` | entries in the PR's original change first raised in a diff-only round |
