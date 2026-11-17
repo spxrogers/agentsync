@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/spxrogers/agentsync/internal/adapter"
+	"github.com/spxrogers/agentsync/internal/filemode"
 	"github.com/spxrogers/agentsync/internal/iox"
 	"github.com/spxrogers/agentsync/internal/jsonkeys"
 	"github.com/spxrogers/agentsync/internal/paths"
@@ -215,7 +216,7 @@ func (w *Writer) Write(op adapter.FileOp, finalBytes []byte) error {
 		// default it to 0o644 on a real write), so it never triggers a mode fix.
 		if op.Mode != 0 {
 			want := os.FileMode(op.Mode).Perm()
-			if fi, serr := os.Stat(op.Path); serr == nil && fi.Mode().Perm() != want {
+			if fi, serr := os.Stat(op.Path); serr == nil && !filemode.Equal(fi.Mode(), want) {
 				if w.dryRun {
 					// Preview: a mode-only mismatch WOULD change on a real apply.
 					w.wouldChange[op.Path] = true

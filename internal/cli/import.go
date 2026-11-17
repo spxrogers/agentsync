@@ -198,6 +198,11 @@ func importRun(cmd *cobra.Command, args []string, dryRun bool) error {
 			"set AGENTSYNC_ALLOW_UNIMPLEMENTED=1 to import from its noop adapter anyway", agentName)
 	}
 
+	if guard, ok := a.(adapter.ComponentImportGuard); ok {
+		if err := guard.CheckComponentImport(component); err != nil {
+			return err
+		}
+	}
 	c, err := a.Ingest(sc, projectRoot)
 	if err != nil {
 		return fmt.Errorf("ingest %s: %w", agentName, err)
@@ -1568,6 +1573,9 @@ func importMemory(io *importIO, home string, c source.Canonical) ([]string, erro
 	// Memory is a single block, not a named collection; nothing to write when
 	// the agent carries no memory (the common case during a full-agent import).
 	if strings.TrimSpace(c.Memory.Body) == "" {
+		if len(c.Memory.Fragments) != 0 {
+			io.note("skipping conditional instructions import without global memory; edit canonical memory/fragments and apply")
+		}
 		return nil, nil
 	}
 	// If apply also wrote fragment markers, reverse them back into AGENTS.md +
@@ -1580,6 +1588,12 @@ func importMemory(io *importIO, home string, c source.Canonical) ([]string, erro
 		io.notef("skipping memory import — fragment markers could not be reversed (%v). Reconcile memory/ by hand, then apply.", err)
 		return nil, nil
 	case hadMarkers:
+		for name, content := range c.Memory.Fragments {
+			if existing, present := mem.Fragments[name]; present && existing != content {
+				return nil, fmt.Errorf("conflicting imported memory fragment %q; edit canonical memory/fragments and apply", name)
+			}
+			mem.Fragments[name] = content
+		}
 		if !io.dryRun {
 			if werr := source.WriteMemory(home, mem); werr != nil {
 				return nil, fmt.Errorf("write memory: %w", werr)

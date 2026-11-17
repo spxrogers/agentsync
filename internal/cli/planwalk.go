@@ -8,6 +8,7 @@ import (
 
 	"github.com/spxrogers/agentsync/internal/adapter"
 	"github.com/spxrogers/agentsync/internal/drift"
+	"github.com/spxrogers/agentsync/internal/filemode"
 	"github.com/spxrogers/agentsync/internal/jsonkeys"
 	"github.com/spxrogers/agentsync/internal/render"
 	"github.com/spxrogers/agentsync/internal/state"
@@ -85,7 +86,7 @@ func (i planItem) opModeDrifted() bool {
 	if i.op.Mode == 0 || !i.destRegular {
 		return false
 	}
-	return os.FileMode(i.destPerm).Perm() != os.FileMode(i.op.Mode).Perm()
+	return !filemode.Equal(os.FileMode(i.destPerm), os.FileMode(i.op.Mode))
 }
 
 // classWithModeDrift is the class status and explain report: the content class,

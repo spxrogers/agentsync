@@ -853,3 +853,59 @@ func TestSkills_SkippedAgentsEmitNothing(t *testing.T) {
 		})
 	}
 }
+
+// TestCopilot_UserInstructions pins the breadth-tier copilot row rendering the
+// canonical memory to the harness's user-level instructions file
+// (~/.copilot/copilot-instructions.md) in addition to the project rules file,
+// and capturing it back byte-clean.
+func TestCopilot_UserInstructions(t *testing.T) {
+	var spec generic.Spec
+	found := false
+	for _, s := range generic.Specs() {
+		if s.Name == "copilot" {
+			spec, found = s, true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("copilot spec missing from the breadth table")
+	}
+	if spec.Memory.User != ".copilot/copilot-instructions.md" {
+		t.Fatalf("copilot user memory target = %q", spec.Memory.User)
+	}
+	a := generic.New(spec, generic.Options{TargetRoot: t.TempDir()})
+	body := "# Rules\n\nBe terse.\n"
+
+	uops, _, _ := a.Render(secrets.ForRender(source.Canonical{Memory: source.Memory{Body: body}}), adapter.ScopeUser, "")
+	uop := findOp(uops, ".copilot/copilot-instructions.md")
+	if uop == nil {
+		t.Fatalf("user instructions op missing: %+v", uops)
+	}
+	if !strings.HasPrefix(string(uop.Content), "<!-- agentsync:managed memory-banner -->") {
+		t.Fatalf("expected managed banner prefix: %q", uop.Content)
+	}
+	if !strings.Contains(string(uop.Content), "copilot-instructions.md") {
+		t.Fatalf("banner must name the destination file: %q", uop.Content)
+	}
+	if source.StripManagedBanner(string(uop.Content)) != body {
+		t.Fatalf("user instructions wrong under banner: %q", uop.Content)
+	}
+
+	if err := a.Apply(uops, adapter.PassThroughWriter{}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := a.Ingest(adapter.ScopeUser, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Memory.Body != body {
+		t.Fatalf("user instructions round-trip: %q", got.Memory.Body)
+	}
+
+	proj := t.TempDir()
+	pc := source.Canonical{Memory: source.Memory{Body: body}, Project: &source.Canonical{Memory: source.Memory{Body: body}}}
+	pops, _, _ := a.Render(secrets.ForRender(pc), adapter.ScopeProject, proj)
+	if op := findOp(pops, "copilot-instructions.md"); op == nil || op.Path != filepath.Join(proj, ".github", "copilot-instructions.md") {
+		t.Fatalf("project rules file must stay project-scoped: %+v", pops)
+	}
+}

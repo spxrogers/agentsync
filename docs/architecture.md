@@ -266,8 +266,9 @@ comments in the rewritten file (a documented v1 limit).
 
 Several **optional** extensions sit beside the core interface — an adapter
 implements one only if the agent has the concept, and callers type-assert for
-it: `PluginIngester` (below), `MCPSpecIngester`, `HookIngestGuard`,
-`HookEventNamer`, `VersionedDirs` and `WarnEmitter`. The first two are
+it: `PluginIngester` (below), `MCPSpecIngester`, `FileWriteBackGuard`,
+`ComponentImportGuard`, `HookIngestGuard`, `HookEventNamer`, `VersionedDirs`
+and `WarnEmitter`. The first two are
 **read-only by construction**: they exist to let the *capture* direction ask the
 adapter a question, and neither has a `Render`-side counterpart.
 
@@ -913,10 +914,34 @@ its inverse is REFUSED rather than guessed at, and the registry-wide guard
 `TestMCPSpecIngester_CoversEveryKeyMergeMCPRenderer` turns that state into a
 failing test.
 
-**The whole-file arm applies the same rule from the other side.** It copies the
-destination verbatim into the canonical file the SourceID names — right for the
-text components (skills, subagents, commands, memory), whose canonical form *is*
-the rendered text, and wrong for the structured, secret-bearing kinds
+**Unsupported import components are isolated.** The optional
+`adapter.ComponentImportGuard` (`CheckComponentImport(component string) error`)
+checks the requested selector before native ingest. Copilot refuses explicit
+`hook` imports, including dry runs, but permits whole-agent and unrelated
+component imports. Its ingest warns when the managed hook file is present and
+leaves those hooks uncaptured without reading their payload. This is not
+`HookIngestGuard`: unsupported Copilot hooks do not trigger stale canonical hook
+retirement. Native hook files, canonical hook files, and their ownership remain
+untouched. Regression: `TestImportCopilotHooksDoNotBlockOtherComponents`.
+
+**Transformed Markdown is not a verbatim source.** The optional
+`adapter.FileWriteBackGuard` (`CheckFileWriteBack(op FileOp) error`) lets the
+rendering adapter refuse a whole-file copy before reconcile writes anything.
+The check is shared by interactive, bulk, and automatic write-back. Copilot
+refuses direct write-back of agents, command skills, and conditional
+instructions: generated banners, tool aliases, and invocation metadata must not
+enter canonical Markdown. Use `import copilot:subagent:<name>` or
+`import copilot:command:<name>` for those components; conditional instructions
+remain canonical-edit/apply only. Local refuses its transformed Markdown,
+including global memory with generated `applyTo` frontmatter. Exact skill files
+and key-level MCP capture retain their existing paths. Regression:
+`TestReconcileVSCodeTransformedMarkdownRefusesWriteBack` verifies refusal leaves
+canonical files unchanged and Copilot command/agent import remains usable.
+
+**The whole-file arm applies the same rule from the other side.** After that
+adapter guard, it copies the destination verbatim into the canonical file the
+SourceID names — right for text components whose canonical form *is* the
+rendered text, and wrong for the structured, secret-bearing kinds
 `walkSecretFields` visits — so a SourceID under `mcp/`, `lsp/` or `hooks/` is
 refused there by kind, with `agentsync import <agent>:<component>:<name>` as the
 remedy (it captures the edit through the adapter's `Ingest` and
@@ -1032,9 +1057,13 @@ production caller today.
 a removed component doesn't linger in the destination: emptied key-merge sections
 (an MCP/hook/LSP section whose source went empty — cleaned via a synthesized
 empty-merge op) and **whole-file components** whose `source_id` is under
-`skills/`, `subagents/`, `commands/`, or the RETIRED `agents/` spelling — a whole
-skill, one bundled `scripts/`/`references/`/`assets/` file within one, a
-subagent, or a slash command that the source no longer renders. The retired
+`skills/`, `subagents/`, `commands/`, or the RETIRED `agents/` spelling, plus
+standalone conditional instructions under `memory/fragments/**/*.instructions.md`
+— a whole skill, one bundled `scripts/`/`references/`/`assets/` file within one,
+a subagent, a slash command, or a conditional instruction that the source no
+longer renders. SourceID separators are normalized before classification so
+Windows-rendered paths follow the same policy. Global memory and ordinary
+memory fragments are not reclaimed. The retired
 prefix is listed because the canonical `agents/` → `subagents/` rename ships in
 the same release as namespacing: an upgrading user's state still holds the old
 spelling, and the only rewriter runs from `migrate subagents`, which no-ops for a
@@ -1694,3 +1723,47 @@ constructor `render.RecordOpsState` uses, so the two agree structurally rather t
 convention — and the round-trip test seeds ownership through the real
 `render.RecordOpsState`, so a divergence in what either side *passes* that constructor
 breaks that test rather than silently under-capturing.
+
+
+## Host permission semantics
+
+Permission drift uses the same comparison in diagnostics and the writer. On Windows, only the owner-write bit is compared because Go chmod represents the read-only attribute; group, other, and execute bits cannot be applied independently. Unix still compares all nine permission bits. This prevents content-identical files from repeatedly appearing changed on Windows while retaining detection of read-only drift. The shared comparison lives in internal/filemode; regression coverage includes TestPermissionSemantics, TestHostPermissionDrift, and TestWriterHostPermissionConvergence.
+
+
+## VS Code Local harness profile instructions
+
+The opt-in `vscode-local` adapter renders profile instructions, agents, prompts,
+conditional instructions, skills, and MCP. Copilot renders harness-home resources
+and shares native project targets where the formats agree. Rendering reuses the
+generic MCP/skills writers and the common VS Code Markdown projection. Shared
+project agents are byte-identical; differing metadata is rejected or skipped
+before writing. Local declares JSON key merging and the matching MCP spec ingester.
+
+Enable `[agents.vscode-local] enabled = true` and configure an absolute
+`[vscode_local] prompts_home = '${env:APPDATA}/Code/User/prompts'` in
+`agentsync.toml`. First verify the running editor's actual `currentProfile.promptsHome`.
+Select the effective prompts directory explicitly for default/named profiles,
+profiles inheriting default prompts, portable installs or custom user-data-dir.
+There is no product-name based fallback and no writes across all profiles.
+`AGENTSYNC_TARGET_ROOT` redirects this target beneath the sandbox even when
+the configured profile path is real. Existing sibling instruction files are
+preserved; an unmanaged same-name collision is refused. Repeated apply is a no-op.
+No profile Git repository is initialized. Local whole-agent import/reconcile
+write-back remains unsupported. `mcp_file` handles profiles whose MCP and inherited
+prompts belong to different locations. Environment expansion is runtime-only;
+canonical expressions are retained. Project paths do not depend on user profiles.
+Conditional instruction files reuse `Memory.Fragments`, rather than a new secret
+surface. Copilot command skills carry a managed marker for reverse import, which
+refuses changed invocation metadata or bundled files. Copilot native command hooks
+require explicit per-scope opt-in; no automatic Hook protocol conversion occurs.
+See the [harness contract](capability-matrix.md#vs-code-local-harness-profile-instructions)
+for paths and import limitations.
+
+VS Code Local instruction discovery requires `chat.includeApplyingInstructions`
+(default true). The adapter does not rewrite editor settings. Verify the selected
+Local harness in Agent Customizations and then References in a representative
+request; file discovery alone does not prove model adherence. Sending a BYOK
+request may incur costs and is a separate validation step.
+
+Sources: https://code.visualstudio.com/docs/agent-customization/custom-instructions
+and https://code.visualstudio.com/docs/agents/reference/ai-settings .

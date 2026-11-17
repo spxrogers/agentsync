@@ -26,7 +26,7 @@ import (
 // breadth-tier generic specs). The full valid-agent set is these plus every
 // generic.Specs() entry — see allAgentNames.
 var deepAdapterNames = []string{
-	"claude", "opencode", "codex", "cursor", "gemini", "continue", "windsurf", "roo", "cline", "grok",
+	"claude", "opencode", "codex", "cursor", "gemini", "continue", "windsurf", "roo", "cline", "grok", "vscode-local",
 }
 
 // deepAgentBinaries maps a deep adapter to the executable agentsync looks for on

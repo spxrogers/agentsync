@@ -1331,6 +1331,11 @@ func (s *reconcileSession) writeBackItem(it reconcileItem) error {
 	if it.ptr != "" {
 		return s.writeBackKeyItem(it)
 	}
+	if guard, ok := s.reg.Lookup(it.agentName).(adapter.FileWriteBackGuard); ok {
+		if err := guard.CheckFileWriteBack(it.op); err != nil {
+			return err
+		}
+	}
 	return writeBackFileItem(s.home, it)
 }
 
