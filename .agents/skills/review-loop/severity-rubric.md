@@ -100,10 +100,11 @@ These are the cases where reviewers disagree with each other.
   - Not a finding: an equivalent mutant, one with no observable effect.
   - A gap is never rated above `ISSUE`, and never above the defect it would let through.
 - **A pre-existing defect is rated like any other and marked pre-existing.** It is pre-existing
-  when it is in code the change did not touch, and the change neither makes it reachable nor
-  makes it worse; a defect the change newly exposes is the change's own. The label says how
-  bad it is. That the change did not introduce it is a fact the receiver needs beside the label,
-  not a reason to lower it.
+  when it is in code the change did not touch, and the change neither makes it worse nor more
+  likely; a defect the change makes worse or more likely is marked *pre-existing, worsened by
+  the PR* instead. Code that was right until the change altered what it relies on is not
+  pre-existing at all: the defect is the change's. The label says how bad it is. That the change
+  did not introduce it is a fact the receiver needs beside the label, not a reason to lower it.
 - **A design alternative needs a scenario like anything else.** "This should be an interface",
   "this belongs in another package": `NIT`, unless you can name what goes wrong with the design
   as built (two copies that will drift and one already has; a caller that cannot be written).
