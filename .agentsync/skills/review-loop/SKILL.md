@@ -248,25 +248,57 @@ file outside the worktree (the session's scratchpad directory, or
 - **each lens's report, verbatim**, saved beside the context file as
   it arrives (`round-<n>-<lens>.md`), so the Round history can be
   checked against what the reviewers actually said;
-- a **Round history** section, appended after every round: which
-  kind of round it was (whole-PR or diff-only), and each
-  finding, its severity, which lenses raised it, for an accepted
-  BLOCKER or ISSUE the one line of evidence that it was real, or
-  *accepted without verification* (Step 2, item 5), **where it came
-  from** (*the original change*; *round N's fix*, naming the commit;
-  *pre-existing*; or *pre-existing, worsened by the PR*), its class
-  when it has one, with the number of
-  other instances the sweep found (Step 3), and what was done
-  (fixed in which commit; fixed in its own PR, naming the PR, its
-  head and the rewritten previous SHA; *held* at the round gate; a NIT *held for
-  the exit*; *pre-existing — to be filed* or *out of scope — to be
-  filed*, with the reason, then *filed as* its issue (a NIT:
-  *listed*); proposed for
-  deferral and awaiting the user; deferred by the user, with their
-  words; deliberately not fixed; or overruled, with the lens's own
-  words, its original severity, and your evidence). The final
-  report's scorecard is counted from these entries
-  ([`report.md`](report.md)), so write each one when its round ends.
+- a **Round history** section, appended after every round. The
+  final report's scorecard is counted from it
+  ([`report.md`](report.md)), so write each round's entries when
+  the round ends. Each round records which kind it was (whole-PR or
+  diff-only), any extension the judge granted with its reasoning
+  (Step 6), each later rebase onto a fix's own PR, once its branch
+  has moved, with its new base and the rewritten previous SHA
+  (Step 3), and each finding:
+  - its audited severity, and which lenses raised it; when you
+    rated it differently from the lens, the lens's label, its own
+    words and your evidence (Step 2, items 4–5);
+  - for a BLOCKER or ISSUE you accepted or filed, the one line of
+    evidence that it was real (Step 2, items 5–6); for one accepted
+    with the audit skipped, *accepted without verification* and,
+    once it is fixed, what the fix changed;
+  - **where it came from**: *the original change*; *round N's fix*,
+    naming the commit; *pre-existing*; or *pre-existing, worsened
+    by the PR* — not asked of an *out of scope* finding, which is
+    not a defect;
+  - its class when it has one, with the number of other instances
+    the sweep found, or "class swept, 0 more" (Step 3);
+  - **what was done**, one of:
+    - fixed, naming the commit;
+    - fixed in its own PR, naming the PR, its head, the rewritten
+      previous SHA, and how the PR worsened it;
+    - *held* at the round gate;
+    - a NIT *held for the exit*, or dropped at the exit because a
+      later fix removed it;
+    - *pre-existing — to be filed* or *out of scope — to be filed*,
+      with the reason (for *out of scope*, the chain: the files or
+      modules the fix would reach beyond the PR, and for a BLOCKER
+      or ISSUE the lens's own words), then *filed as* its issue (a
+      NIT: *listed*) — or, for a *pre-existing* one, *linked to* the
+      open or *not planned* issue that covers it;
+    - awaiting the user: a proposed deferral, a disagreement the
+      mandate leaves to them, a finding neither of you can verify,
+      or a fix in its own PR the session cannot open or force-push
+      (Step 2, items 3 and 5; Step 3);
+    - deferred by the user, with their words;
+    - deliberately not fixed;
+    - dropped as false — an overrule (below);
+  - beside that outcome, when it applies:
+    - **overruled**: dropped as false or rated below the lens's
+      label, with the lens's own words, its original severity and
+      your evidence (the severity bullet above), and *withdrawn* if
+      the lens's answer next round convinced you (Step 2, item 4).
+      A finding rated down to a NIT then takes a NIT's outcome;
+    - for a BLOCKER or ISSUE filed as *out of scope*, or a finding
+      a lens marked *pre-existing, worsened by the PR* that you
+      filed as *pre-existing*, the lens's answer next round, or
+      *not answered: no later round* (Step 2, item 6).
 
 Each brief then carries only its lens, the round's SHA and diffs,
 a few lines on what this round changed, and its angles; the PR's
