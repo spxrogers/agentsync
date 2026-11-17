@@ -49,7 +49,12 @@ otherwise:
 > The Round history lists findings the main session overruled, with
 > its evidence. For each one your lens raised, check that evidence
 > and answer it in one line: raise it again and say why the
-> evidence is wrong, or drop it. Findings the user deferred are
+> evidence is wrong, or drop it. Answer each finding of your lens
+> filed as *out of scope* the same way, against the chain recorded
+> for it: raise it again only to show the PR causes or worsens the
+> defect. Answer a finding you marked *pre-existing, worsened by
+> the PR* that was filed as plain pre-existing the same way.
+> Findings the user deferred are
 > listed there too, with the user's words, and so are NITs *held
 > for the exit* and pre-existing findings already recorded: do not
 > raise any of those again.
@@ -74,9 +79,11 @@ word cap, from its file:
 > the call sites of a function).
 >
 > **Mark a finding *pre-existing*** when the defect is in code this
-> PR did not change and the PR neither makes it reachable nor makes
-> it worse. Rate it as usual; say in a clause how you know the PR
-> did not touch it.
+> PR did not change and the PR neither makes it worse nor makes it
+> more likely. Rate it as usual; say in a clause how you know the PR
+> did not touch it. When the PR does make it worse or more likely
+> (a new caller reaches it, a new input makes it fire), mark it
+> *pre-existing, worsened by the PR*, and say how.
 >
 > **At most three NITs**, the three most worth a reader's time, and
 > one line saying how many more you left out. If
