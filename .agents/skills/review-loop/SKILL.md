@@ -489,7 +489,7 @@ converged — carries no weight.
    | *the PR's own* | the PR causes it: in a line it added or changed, or in unchanged code that was right until the PR changed what it relies on (a caller of a contract it changed, an assumption it broke) | fixed here, however far the fix reaches | yes |
    | *pre-existing* | unchanged code, already wrong on its own terms — for an input or state the base allowed, whether or not anything reached it — and the PR makes it neither worse nor more likely | filed | no |
    | *pre-existing, worsened by the PR* | as *pre-existing*, but the PR makes it worse or more likely: a new caller reaches it, a new input makes it fire, it fires more often or does more harm | a BLOCKER or ISSUE is fixed in its own PR, and this branch rebased onto it (Step 3, *A fix in its own PR*); a NIT is filed, reported and counted as *pre-existing* | a BLOCKER or ISSUE, until this branch sits on the fix |
-   | *out of scope* | not a defect (a defect is one of the three above): work the PR is correct and complete without — hardening, a refactor, making old code match a new pattern — that is *clearly* outside the PR's purpose (its title, its body, the user's framing), or would set off a chain of follow-on changes (other callers, other modules, a contract, their tests and docs) | filed, with the chain written in the Round history: the files or modules the fix would reach beyond the PR | no |
+   | *out of scope* | not a defect (a defect is one of the three above): work the PR is correct and complete without — hardening, a refactor, making old code match a new pattern — that is *clearly* outside the PR's purpose (its title, its body, the user's framing), or would set off a chain of follow-on changes (other callers, other modules, a contract, their tests and docs) that would grow the PR well past its purpose | filed, with the chain written in the Round history: the files or modules the fix would reach beyond the PR | no |
 
    - **When in doubt whether a finding is the PR's own, it is.**
    - **An expensive fix does not change the kind.** When the whole
@@ -618,7 +618,7 @@ For each fix:
 - **A fix follows the repo's own rules for what it touches**
   (`.reviewlooprc` → *Fixing*): a rule, say, that something
   already published is replaced by a new one rather than edited.
-- **A fix in its own PR** — for a BLOCKER or ISSUE marked
+- **A fix in its own PR** — for a BLOCKER or ISSUE you sorted as
   *pre-existing, worsened by the PR* (Step 2, item 6). Before
   step 1:
   - It is a fix like any other for the round gate and gated areas
